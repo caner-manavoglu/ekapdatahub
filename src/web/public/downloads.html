@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>EKAP İndirilenler</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="bg-noise" aria-hidden="true"></div>
+    <header class="topbar">
+      <div class="topbar__brand">
+        <p class="eyebrow">EKAP DATA HUB</p>
+        <h1>İndirilenler Yönetimi</h1>
+      </div>
+      <form id="downloadsFilterForm" class="topbar__actions" autocomplete="off">
+        <a href="/" class="btn btn--ghost btn--link">Ana Sayfa</a>
+        <div class="topbar__field">
+          <label for="dateFilterSelect">Çekim Tarihi</label>
+          <select id="dateFilterSelect" aria-label="Çekim Tarihi">
+            <option value="">Tüm Tarihler</option>
+          </select>
+        </div>
+        <button type="submit" class="btn btn--primary">Listele</button>
+        <button type="button" id="clearFilterButton" class="btn btn--ghost">Filtreyi Temizle</button>
+        <button type="button" id="deleteSelectedButton" class="btn btn--danger">Seçilenleri Sil</button>
+        <button type="button" id="deleteByDateButton" class="btn btn--danger">Tarihi Toplu Sil</button>
+        <span id="downloadStatus" class="meta-pill">Hazır</span>
+      </form>
+    </header>
+
+    <main class="layout layout--single">
+      <section class="panel panel--detail downloads-panel">
+        <div class="panel__head">
+          <h2>İndirilen Kayıtlar</h2>
+          <span id="downloadsMeta" class="meta-pill">-</span>
+        </div>
+
+        <div class="downloads-table-wrap">
+          <table class="downloads-table">
+            <thead>
+              <tr>
+                <th>
+                  <input type="checkbox" id="selectAllCheckbox" aria-label="Tümünü seç" />
+                </th>
+                <th>İKN</th>
+                <th>İhale Adı</th>
+                <th>İdare</th>
+                <th>Güncelleme Tarihi</th>
+              </tr>
+            </thead>
+            <tbody id="downloadsTableBody"></tbody>
+          </table>
+        </div>
+
+        <div class="pager">
+          <button id="prevPageButton" class="btn btn--ghost" type="button">Önceki</button>
+          <span id="pageMeta" class="pager__meta">Sayfa 1 / 1</span>
+          <button id="nextPageButton" class="btn btn--ghost" type="button">Sonraki</button>
+        </div>
+      </section>
+    </main>
+
+    <div id="confirmOverlay" class="confirm-overlay" hidden>
+      <div class="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+        <h2 id="confirmTitle">Silme Onayı</h2>
+        <p id="confirmMessage"></p>
+        <p class="confirm-hint">Devam etmek için <strong>onaylıyorum</strong> yazın.</p>
+        <input
+          id="confirmInput"
+          type="text"
+          autocomplete="off"
+          placeholder="onaylıyorum"
+          aria-label="Silme onayı"
+        />
+        <p id="confirmError" class="confirm-error" hidden>Onay metni hatalı.</p>
+        <div class="confirm-actions">
+          <button id="cancelConfirmButton" type="button" class="btn btn--ghost">Vazgeç</button>
+          <button id="approveConfirmButton" type="button" class="btn btn--danger">Sil</button>
+        </div>
+      </div>
+    </div>
+
+    <script src="/downloads.js" defer></script>
+  </body>
+</html>
