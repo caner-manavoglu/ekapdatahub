@@ -1,0 +1,15 @@
+{
+  "scripts": {
+    "mahkeme:visible": "node ekap-selenium-mahkeme.js --browserMode=visible",
+    "mahkeme:headless": "node ekap-selenium-mahkeme.js --browserMode=headless",
+    "uyusmazlik:visible": "node ekap-selenium-uyusmazlik.js --browserMode=visible",
+    "uyusmazlik:headless": "node ekap-selenium-uyusmazlik.js --browserMode=headless"
+  },
+  "dependencies": {
+    "chromedriver": "^145.0.6",
+    "selenium-webdriver": "^4.41.0"
+  },
+  "devDependencies": {
+    "baseline-browser-mapping": "^2.9.14"
+  }
+}
