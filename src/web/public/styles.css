@@ -134,6 +134,8 @@ body {
 
 .layout--single {
   grid-template-columns: 1fr;
+  height: auto;
+  align-items: start;
 }
 
 .panel {
@@ -142,6 +144,10 @@ body {
   border: 1px solid rgba(15, 23, 36, 0.1);
   overflow: hidden;
   height: 100%;
+}
+
+.layout--single .panel {
+  height: auto;
 }
 
 .panel--list {
@@ -459,6 +465,98 @@ body {
   width: 40px;
 }
 
+.v3-panel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.v3-panel--files {
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+
+.v3-body {
+  padding: 14px 16px 16px;
+  display: grid;
+  gap: 12px;
+}
+
+.v3-form {
+  display: grid;
+  gap: 12px;
+}
+
+.v3-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.v3-field {
+  display: grid;
+  gap: 6px;
+}
+
+.v3-field span {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #354a64;
+}
+
+.v3-field input,
+.v3-field select {
+  width: 100%;
+  border: 1px solid #c5d0de;
+  border-radius: 10px;
+  background: #fff;
+  color: #172233;
+  padding: 8px 10px;
+}
+
+.v3-field--wide {
+  grid-column: span 3;
+}
+
+.v3-field--inline {
+  display: inline-grid;
+  min-width: 220px;
+}
+
+.v3-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.v3-output-label {
+  font-size: 0.84rem;
+  color: #354a64;
+  font-weight: 700;
+}
+
+.v3-output {
+  width: 100%;
+  min-height: 80px;
+  border: 1px solid #cad2dc;
+  border-radius: 12px;
+  background: #fff;
+  color: #0f1724;
+  padding: 10px 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85rem;
+  line-height: 1.45;
+  resize: vertical;
+}
+
+.v3-mini-btn {
+  padding: 6px 10px;
+  font-size: 0.78rem;
+}
+
+.v3-file-label {
+  font-size: 0.86rem;
+  color: #354a64;
+}
+
 .confirm-overlay {
   position: fixed;
   inset: 0;
@@ -603,6 +701,14 @@ body {
 
   .topbar__field input[type="number"] {
     width: 100%;
+  }
+
+  .v3-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .v3-field--wide {
+    grid-column: span 1;
   }
 
   .detail__toolbar {

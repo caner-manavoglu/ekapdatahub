@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>EKAP v3 İndirme Paneli</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="bg-noise" aria-hidden="true"></div>
+    <header class="topbar">
+      <div class="topbar__brand">
+        <p class="eyebrow">EKAP DATA HUB</p>
+        <h1>EKAP v3 Start/Stop Yönetimi</h1>
+      </div>
+      <div class="topbar__actions">
+        <a href="/" class="btn btn--ghost btn--link">Ana Sayfa</a>
+        <a href="/indirilenler" class="btn btn--ghost btn--link">İndirilenler</a>
+        <span id="v3Status" class="meta-pill">Hazır</span>
+      </div>
+    </header>
+
+    <main class="layout layout--single">
+      <section class="panel panel--detail v3-panel">
+        <div class="panel__head">
+          <h2>İndirme Parametreleri</h2>
+          <span id="v3RunMeta" class="meta-pill">Çalışma yok</span>
+        </div>
+        <div class="v3-body">
+          <form id="v3Form" class="v3-form" autocomplete="off">
+            <div class="v3-grid">
+              <label class="v3-field">
+                <span>Tür</span>
+                <select id="jobType">
+                  <option value="mahkeme">Mahkeme</option>
+                  <option value="uyusmazlik">Uyuşmazlık</option>
+                </select>
+              </label>
+
+              <label class="v3-field">
+                <span>Başlangıç Tarihi</span>
+                <input id="fromDate" type="date" required />
+              </label>
+
+              <label class="v3-field">
+                <span>Bitiş Tarihi</span>
+                <input id="toDate" type="date" required />
+              </label>
+
+              <label class="v3-field">
+                <span>Başlangıç Sayfası</span>
+                <input id="startPage" type="number" min="1" step="1" value="1" required />
+              </label>
+
+              <label class="v3-field">
+                <span>Bitiş Sayfası</span>
+                <input id="endPage" type="number" min="1" step="1" value="1" required />
+              </label>
+
+              <label class="v3-field">
+                <span>Browser Mode</span>
+                <select id="browserMode">
+                  <option value="headless">headless</option>
+                  <option value="visible">visible</option>
+                </select>
+              </label>
+            </div>
+
+            <div class="v3-actions">
+              <button type="submit" id="startButton" class="btn btn--accent">Start</button>
+              <button type="button" id="stopButton" class="btn btn--danger" disabled>Stop</button>
+            </div>
+          </form>
+        </div>
+      </section>
+
+      <section class="panel panel--detail v3-panel">
+        <div class="panel__head">
+          <h2>Canlı Log</h2>
+          <span class="meta-pill">Son 500 satır</span>
+        </div>
+        <div class="v3-body">
+          <pre id="v3LiveLog" class="text-block">Henüz log yok.</pre>
+        </div>
+      </section>
+
+      <section class="panel panel--detail v3-panel">
+        <div class="panel__head">
+          <h2>İndirme Geçmişi</h2>
+          <span id="v3HistoryMeta" class="meta-pill">0 kayıt</span>
+        </div>
+        <div class="downloads-table-wrap">
+          <table class="downloads-table">
+            <thead>
+              <tr>
+                <th>Başlangıç</th>
+                <th>Tür</th>
+                <th>Tarih Aralığı</th>
+                <th>Seçilen Sayfalar</th>
+                <th>İşlenen Sayfalar</th>
+                <th>Durum</th>
+                <th>Sonuç</th>
+              </tr>
+            </thead>
+            <tbody id="v3HistoryBody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel panel--detail v3-panel v3-panel--files">
+        <div class="panel__head">
+          <h2>İndirilen Dosyalar</h2>
+          <span id="v3FilesMeta" class="meta-pill">0 dosya</span>
+        </div>
+        <div class="v3-body">
+          <div class="v3-actions">
+            <label class="v3-field v3-field--inline" for="v3FilesTypeFilter">
+              <span>Tür</span>
+              <select id="v3FilesTypeFilter">
+                <option value="">Tümü</option>
+                <option value="mahkeme">Mahkeme</option>
+                <option value="uyusmazlik">Uyuşmazlık</option>
+              </select>
+            </label>
+            <button type="button" id="v3FilesRefreshButton" class="btn btn--ghost">
+              Listeyi Yenile
+            </button>
+          </div>
+        </div>
+        <div class="downloads-table-wrap">
+          <table class="downloads-table">
+            <thead>
+              <tr>
+                <th>Tarih</th>
+                <th>Tür</th>
+                <th>Dosya</th>
+                <th>Boyut</th>
+                <th>İşlem</th>
+              </tr>
+            </thead>
+            <tbody id="v3FilesBody"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <script src="/ekapv3.js" defer></script>
+  </body>
+</html>

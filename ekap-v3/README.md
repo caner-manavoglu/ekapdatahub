@@ -42,11 +42,17 @@ node ekap-selenium-mahkeme.js --from=2026/02/01 --to=2026/02/15 --maxPages=50 --
 
 node ekap-selenium-uyusmazlik.js --from=2026/02/01 --to=2026/02/15 --maxPages=50 --browserMode=visible
 
+Belirli bir sayfa aralığı için:
+
+node ekap-selenium-mahkeme.js --from=2026/02/01 --to=2026/02/15 --startPage=3 --endPage=7 --browserMode=headless
+
 Kullanılabilir parametreler:
 
 - `--from=`: Başlangıç tarihi (`YYYY/MM/DD`, `YYYY-MM-DD`, `DD.MM.YYYY`)
 - `--to=`: Bitiş tarihi (`YYYY/MM/DD`, `YYYY-MM-DD`, `DD.MM.YYYY`)
 - `--maxPages=`: En fazla taranacak sayfa sayısı
+- `--startPage=`: İşleme başlanacak sayfa (varsayılan `1`)
+- `--endPage=`: İşlenecek son sayfa (verilmezse `startPage + maxPages - 1`)
 - `--dateInputIndex=`: Tarih input index'i (varsayılan `0`)
 - `--timeoutRetries=`: `ERR_CONNECTION_TIMED_OUT` hatasında aynı satır için tekrar deneme sayısı (varsayılan `2`)
 - `--browserMode=`: `headless` veya `visible`

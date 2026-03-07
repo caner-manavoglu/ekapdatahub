@@ -73,7 +73,20 @@ const parseMonthYearLabel = (label) => {
 
 const fromDate = toCalendarValue(getArg('from', process.env.FROM_DATE || DEFAULT_FROM));
 const toDate = toCalendarValue(getArg('to', process.env.TO_DATE || DEFAULT_TO));
-const maxPages = Number(getArg('maxPages', process.env.MAX_PAGES || '500'));
+const maxPagesRaw = Number(getArg('maxPages', process.env.MAX_PAGES || '500'));
+const maxPages = Number.isFinite(maxPagesRaw) && maxPagesRaw > 0 ? Math.floor(maxPagesRaw) : 500;
+const startPageRaw = Number(getArg('startPage', process.env.START_PAGE || '1'));
+const startPage = Number.isFinite(startPageRaw) && startPageRaw >= 1 ? Math.floor(startPageRaw) : 1;
+const endPageArg = getArg('endPage', process.env.END_PAGE || '');
+const hasEndPage = endPageArg !== '';
+const endPageRaw = hasEndPage ? Number(endPageArg) : null;
+if (hasEndPage && (!Number.isFinite(endPageRaw) || endPageRaw < startPage)) {
+  throw new Error(`Invalid endPage: ${endPageArg}. endPage must be >= startPage (${startPage}).`);
+}
+const endPage =
+  hasEndPage && Number.isFinite(endPageRaw) && endPageRaw >= startPage
+    ? Math.floor(endPageRaw)
+    : startPage + maxPages - 1;
 const dateInputIndex = Number(getArg('dateInputIndex', process.env.DATE_INPUT_INDEX || '0'));
 const timeoutRetriesRaw = Number(getArg('timeoutRetries', process.env.TIMEOUT_RETRIES || '2'));
 const timeoutRetries =
@@ -329,6 +342,9 @@ const clickDownloadInDetail = async (driver, baseline) => {
 const processCurrentPageRows = async (driver, pageNo) => {
   let rowIndex = 0;
   let timeoutRetryCount = 0;
+  let downloaded = 0;
+  let failed = 0;
+  let retries = 0;
 
   while (true) {
     const icons = await getVisibleElements(driver, 'div#show-detail-button.grid-detail-icon');
@@ -355,6 +371,7 @@ const processCurrentPageRows = async (driver, pageNo) => {
       }
 
       console.log(`Page ${pageNo}, row ${rowIndex + 1}: downloaded.`);
+      downloaded += 1;
       rowIndex += 1;
       timeoutRetryCount = 0;
     } catch (err) {
@@ -363,6 +380,7 @@ const processCurrentPageRows = async (driver, pageNo) => {
 
       if (isConnectionTimedOutError(err) && timeoutRetryCount < timeoutRetries) {
         timeoutRetryCount += 1;
+        retries += 1;
         console.warn(
           `Page ${pageNo}, row ${rowIndex + 1}: ERR_CONNECTION_TIMED_OUT, retrying (${timeoutRetryCount}/${timeoutRetries})`,
         );
@@ -370,12 +388,15 @@ const processCurrentPageRows = async (driver, pageNo) => {
         continue;
       }
 
+      failed += 1;
       rowIndex += 1;
       timeoutRetryCount = 0;
     }
 
     await sleep(400);
   }
+
+  return { downloaded, failed, retries };
 };
 
 const moveToNextPage = async (driver, currentPage) => {
@@ -415,10 +436,14 @@ const moveToNextPage = async (driver, currentPage) => {
 
 const run = async () => {
   const driver = buildDriver();
+  let totalDownloaded = 0;
+  let totalFailed = 0;
+  let totalRetries = 0;
 
   try {
     console.log(`Going to ${BASE_URL}`);
     console.log(`Date range: ${fromDate} -> ${toDate}`);
+    console.log(`Page range: ${startPage} -> ${endPage}`);
     console.log(`Browser mode: ${isHeadless ? 'headless' : 'visible'}`);
     console.log(`Timeout retries per row: ${timeoutRetries}`);
 
@@ -432,11 +457,30 @@ const run = async () => {
     await clickSearch(driver);
     await waitGridReady(driver);
 
-    for (let page = 1; page <= maxPages; page += 1) {
-      console.log(`Processing page ${page}`);
-      await processCurrentPageRows(driver, page);
+    let currentPage = 1;
 
-      const moved = await moveToNextPage(driver, page);
+    while (currentPage < startPage) {
+      const moved = await moveToNextPage(driver, currentPage);
+      if (!moved) {
+        throw new Error(`Could not reach startPage=${startPage}. Last available page: ${currentPage}`);
+      }
+      currentPage += 1;
+      await waitGridReady(driver);
+    }
+
+    for (; currentPage <= endPage; currentPage += 1) {
+      console.log(`Processing page ${currentPage}`);
+      const pageStats = await processCurrentPageRows(driver, currentPage);
+      totalDownloaded += pageStats.downloaded;
+      totalFailed += pageStats.failed;
+      totalRetries += pageStats.retries;
+
+      if (currentPage >= endPage) {
+        console.log('Reached endPage. Finished.');
+        break;
+      }
+
+      const moved = await moveToNextPage(driver, currentPage);
       if (!moved) {
         console.log('No more pages. Finished.');
         break;
@@ -444,6 +488,9 @@ const run = async () => {
 
       await waitGridReady(driver);
     }
+    console.log(
+      `[SUMMARY] downloaded=${totalDownloaded} failed=${totalFailed} retries=${totalRetries}`,
+    );
   } finally {
     await driver.quit();
   }

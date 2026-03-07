@@ -1,4 +1,6 @@
+const fs = require("fs");
 const path = require("path");
+const { spawn } = require("child_process");
 const express = require("express");
 const { MongoClient } = require("mongodb");
 const config = require("../config");
@@ -14,9 +16,17 @@ app.use(express.json({ limit: "1mb" }));
 const WEB_PORT = Number.parseInt(process.env.WEB_PORT || "8787", 10);
 const SCRAPE_TIMEZONE = "Europe/Istanbul";
 const DELETE_CONFIRMATION_TEXT = "onaylıyorum";
+const EKAP_V3_DIR = path.resolve(__dirname, "../../ekap-v3");
+const EKAP_V3_DOWNLOAD_DIRS = {
+  mahkeme: path.join(EKAP_V3_DIR, "downloads-mahkeme"),
+  uyusmazlik: path.join(EKAP_V3_DIR, "downloads-uyusmazlik"),
+};
+const EKAP_V3_LOG_COLLECTION =
+  process.env.EKAP_V3_LOG_COLLECTION || "ekap_v3_download_logs";
 
 let mongoClient;
 let collection;
+let ekapV3LogCollection;
 const scrapeState = {
   running: false,
   stopRequested: false,
@@ -26,6 +36,15 @@ const scrapeState = {
   lastError: null,
   currentRunOptions: null,
   logs: [],
+};
+const ekapV3State = {
+  running: false,
+  stopRequested: false,
+  currentRun: null,
+  lastRun: null,
+  lastError: null,
+  logs: [],
+  childProcess: null,
 };
 
 function toInt(value, fallback) {
@@ -50,6 +69,113 @@ function appendScrapeLog(entry) {
   if (scrapeState.logs.length > 300) {
     scrapeState.logs.shift();
   }
+}
+
+function appendEkapV3Log(level, message) {
+  const entry = {
+    level,
+    message,
+    timestamp: new Date().toISOString(),
+  };
+  ekapV3State.logs.push(entry);
+  if (ekapV3State.logs.length > 500) {
+    ekapV3State.logs.shift();
+  }
+}
+
+function normalizeEkapV3Type(value) {
+  const normalized = String(value || "").trim().toLocaleLowerCase("tr-TR");
+  return normalized === "uyusmazlik" ? "uyusmazlik" : normalized === "mahkeme" ? "mahkeme" : "";
+}
+
+function parseEkapV3Options(body) {
+  const payload = body && typeof body === "object" ? body : {};
+  const type = normalizeEkapV3Type(payload.type);
+  if (!type) {
+    throw new Error("Geçersiz tür. mahkeme veya uyusmazlik olmalı.");
+  }
+
+  const fromDate = String(payload.fromDate || "").trim();
+  const toDate = String(payload.toDate || "").trim();
+  if (!fromDate || !toDate) {
+    throw new Error("Başlangıç ve bitiş tarihi zorunludur.");
+  }
+
+  const startPage = Math.max(1, toInt(payload.startPage, 1));
+  const endPage = Math.max(startPage, toInt(payload.endPage, startPage));
+  const browserModeRaw = String(payload.browserMode || "headless")
+    .trim()
+    .toLocaleLowerCase("tr-TR");
+  const browserMode = browserModeRaw === "visible" ? "visible" : "headless";
+
+  return {
+    type,
+    fromDate,
+    toDate,
+    startPage,
+    endPage,
+    browserMode,
+  };
+}
+
+function createEkapV3RunId() {
+  return `ekapv3-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function resolveEkapV3DownloadType(value) {
+  const normalized = String(value || "")
+    .trim()
+    .toLocaleLowerCase("tr-TR");
+  if (normalized === "mahkeme" || normalized === "uyusmazlik") {
+    return normalized;
+  }
+  return "";
+}
+
+function isSafeFileName(fileName) {
+  if (!fileName) return false;
+  if (fileName.includes("\0")) return false;
+  return path.basename(fileName) === fileName;
+}
+
+async function readEkapV3FilesByType(type) {
+  const dirPath = EKAP_V3_DOWNLOAD_DIRS[type];
+  if (!dirPath) return [];
+
+  let entries = [];
+  try {
+    entries = await fs.promises.readdir(dirPath, { withFileTypes: true });
+  } catch (error) {
+    if (error?.code === "ENOENT") return [];
+    throw error;
+  }
+
+  const rows = [];
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    const fileName = entry.name;
+    if (!fileName || fileName === ".DS_Store") continue;
+    if (fileName.endsWith(".crdownload") || fileName.endsWith(".part")) continue;
+
+    const absolutePath = path.join(dirPath, fileName);
+    let stat;
+    try {
+      stat = await fs.promises.stat(absolutePath);
+    } catch (_) {
+      continue;
+    }
+    if (!stat.isFile()) continue;
+
+    rows.push({
+      type,
+      fileName,
+      sizeBytes: stat.size,
+      updatedAt: stat.mtime.toISOString(),
+      updatedAtMs: stat.mtimeMs,
+    });
+  }
+
+  return rows;
 }
 
 function parseScrapeOptions(body) {
@@ -355,6 +481,386 @@ app.post("/api/scrape/stop", (req, res) => {
       lastRunStartedAt: scrapeState.lastRunStartedAt,
     },
   });
+});
+
+app.get("/api/ekapv3/status", (_, res) => {
+  const current = ekapV3State.currentRun
+    ? {
+        ...ekapV3State.currentRun,
+        pagesProcessed: [...(ekapV3State.currentRun.pagesProcessed || [])].sort((a, b) => a - b),
+      }
+    : null;
+  const last = ekapV3State.lastRun
+    ? {
+        ...ekapV3State.lastRun,
+        pagesProcessed: [...(ekapV3State.lastRun.pagesProcessed || [])].sort((a, b) => a - b),
+      }
+    : null;
+
+  res.json({
+    data: {
+      running: ekapV3State.running,
+      stopRequested: ekapV3State.stopRequested,
+      currentRun: current,
+      lastRun: last,
+      lastError: ekapV3State.lastError,
+      logs: ekapV3State.logs,
+    },
+  });
+});
+
+app.post("/api/ekapv3/start", async (req, res, next) => {
+  try {
+    if (ekapV3State.running) {
+      res.status(409).json({ error: "EKAP v3 indirme işlemi zaten çalışıyor." });
+      return;
+    }
+
+    const options = parseEkapV3Options(req.body);
+    const scriptName =
+      options.type === "mahkeme"
+        ? "ekap-selenium-mahkeme.js"
+        : "ekap-selenium-uyusmazlik.js";
+    const args = [
+      scriptName,
+      `--from=${options.fromDate}`,
+      `--to=${options.toDate}`,
+      `--startPage=${options.startPage}`,
+      `--endPage=${options.endPage}`,
+      `--browserMode=${options.browserMode}`,
+    ];
+
+    const runId = createEkapV3RunId();
+    const startedAt = new Date().toISOString();
+    const currentRun = {
+      runId,
+      startedAt,
+      finishedAt: null,
+      type: options.type,
+      fromDate: options.fromDate,
+      toDate: options.toDate,
+      startPage: options.startPage,
+      endPage: options.endPage,
+      browserMode: options.browserMode,
+      status: "running",
+      stopRequested: false,
+      downloadedCount: 0,
+      failedCount: 0,
+      retryCount: 0,
+      pagesProcessed: [],
+      exitCode: null,
+      signal: null,
+    };
+
+    ekapV3State.running = true;
+    ekapV3State.stopRequested = false;
+    ekapV3State.currentRun = currentRun;
+    ekapV3State.lastError = null;
+    ekapV3State.logs = [];
+    appendEkapV3Log("info", `[RUN] Baslatildi: ${scriptName} ${args.slice(1).join(" ")}`);
+
+    if (ekapV3LogCollection) {
+      await ekapV3LogCollection.insertOne({
+        _id: runId,
+        type: options.type,
+        dateRange: {
+          from: options.fromDate,
+          to: options.toDate,
+        },
+        selectedPages: {
+          startPage: options.startPage,
+          endPage: options.endPage,
+        },
+        browserMode: options.browserMode,
+        status: "running",
+        stopRequested: false,
+        downloadedCount: 0,
+        failedCount: 0,
+        retryCount: 0,
+        pagesProcessed: [],
+        startedAt: new Date(startedAt),
+        finishedAt: null,
+        exitCode: null,
+        signal: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+    }
+
+    const child = spawn(process.execPath, args, {
+      cwd: EKAP_V3_DIR,
+      env: process.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    ekapV3State.childProcess = child;
+
+    const consumeLine = (level, chunk) => {
+      const text = String(chunk || "").trim();
+      if (!text) return;
+      for (const rawLine of text.split(/\r?\n/)) {
+        const line = rawLine.trim();
+        if (!line) continue;
+        appendEkapV3Log(level, line);
+
+        const current = ekapV3State.currentRun;
+        if (!current) continue;
+
+        const downloadedMatch = line.match(/^Page\s+(\d+),\s+row\s+\d+:\s+downloaded\./i);
+        if (downloadedMatch) {
+          current.downloadedCount += 1;
+          const pageNo = toInt(downloadedMatch[1], 0);
+          if (pageNo > 0 && !current.pagesProcessed.includes(pageNo)) {
+            current.pagesProcessed.push(pageNo);
+          }
+          continue;
+        }
+
+        const failedMatch = line.match(/^Page\s+(\d+),\s+row\s+\d+:\s+failed\s+->/i);
+        if (failedMatch) {
+          current.failedCount += 1;
+          const pageNo = toInt(failedMatch[1], 0);
+          if (pageNo > 0 && !current.pagesProcessed.includes(pageNo)) {
+            current.pagesProcessed.push(pageNo);
+          }
+          continue;
+        }
+
+        if (/ERR_CONNECTION_TIMED_OUT.*retrying/i.test(line)) {
+          current.retryCount += 1;
+          continue;
+        }
+
+        const processingMatch = line.match(/^Processing\s+page\s+(\d+)/i);
+        if (processingMatch) {
+          const pageNo = toInt(processingMatch[1], 0);
+          if (pageNo > 0 && !current.pagesProcessed.includes(pageNo)) {
+            current.pagesProcessed.push(pageNo);
+          }
+        }
+      }
+    };
+
+    child.stdout.on("data", (chunk) => consumeLine("info", chunk));
+    child.stderr.on("data", (chunk) => consumeLine("error", chunk));
+
+    child.on("error", async (error) => {
+      appendEkapV3Log("error", `[CHILD_ERROR] ${error?.message || String(error)}`);
+      ekapV3State.lastError = error?.message || String(error);
+      if (ekapV3LogCollection && ekapV3State.currentRun?.runId) {
+        await ekapV3LogCollection.updateOne(
+          { _id: ekapV3State.currentRun.runId },
+          {
+            $set: {
+              status: "failed",
+              updatedAt: new Date(),
+            },
+          },
+        );
+      }
+    });
+
+    child.on("close", async (code, signal) => {
+      const finishedAt = new Date().toISOString();
+      const current = ekapV3State.currentRun;
+      if (!current) {
+        ekapV3State.running = false;
+        ekapV3State.stopRequested = false;
+        ekapV3State.childProcess = null;
+        return;
+      }
+
+      let status = "completed";
+      if (ekapV3State.stopRequested) {
+        status = "stopped";
+      } else if (code !== 0) {
+        status = "failed";
+      }
+
+      current.finishedAt = finishedAt;
+      current.exitCode = code;
+      current.signal = signal || null;
+      current.status = status;
+      current.stopRequested = ekapV3State.stopRequested;
+
+      ekapV3State.lastRun = {
+        ...current,
+        pagesProcessed: [...current.pagesProcessed],
+      };
+      ekapV3State.lastError = status === "failed" ? `Process exited with code ${code}` : null;
+      ekapV3State.running = false;
+      ekapV3State.stopRequested = false;
+      ekapV3State.currentRun = null;
+      ekapV3State.childProcess = null;
+
+      appendEkapV3Log(
+        status === "completed" ? "info" : status === "stopped" ? "warn" : "error",
+        `[DONE] status=${status} exitCode=${code} signal=${signal || "-"}`,
+      );
+
+      if (ekapV3LogCollection) {
+        await ekapV3LogCollection.updateOne(
+          { _id: current.runId },
+          {
+            $set: {
+              status,
+              stopRequested: current.stopRequested,
+              downloadedCount: current.downloadedCount,
+              failedCount: current.failedCount,
+              retryCount: current.retryCount,
+              pagesProcessed: [...current.pagesProcessed].sort((a, b) => a - b),
+              finishedAt: new Date(finishedAt),
+              exitCode: code,
+              signal: signal || null,
+              updatedAt: new Date(),
+            },
+          },
+        );
+      }
+    });
+
+    res.status(202).json({
+      data: {
+        running: true,
+        currentRun,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/ekapv3/stop", (req, res) => {
+  if (!ekapV3State.running || !ekapV3State.childProcess) {
+    res.status(409).json({ error: "Çalışan bir EKAP v3 indirme işlemi yok." });
+    return;
+  }
+
+  ekapV3State.stopRequested = true;
+  if (ekapV3State.currentRun) {
+    ekapV3State.currentRun.stopRequested = true;
+  }
+  appendEkapV3Log("warn", "[STOP] Durdurma isteği alındı.");
+
+  try {
+    ekapV3State.childProcess.kill("SIGTERM");
+  } catch (error) {
+    appendEkapV3Log("error", `[STOP_ERROR] ${error?.message || String(error)}`);
+  }
+
+  res.json({
+    data: {
+      running: true,
+      stopRequested: true,
+    },
+  });
+});
+
+app.get("/api/ekapv3/history", async (req, res, next) => {
+  try {
+    const limit = Math.min(500, Math.max(1, toInt(req.query.limit, 100)));
+    const rows = ekapV3LogCollection
+      ? await ekapV3LogCollection
+          .find({})
+          .sort({ startedAt: -1, createdAt: -1 })
+          .limit(limit)
+          .toArray()
+      : [];
+
+    res.json({
+      data: rows.map((row) => ({
+        runId: row?._id || null,
+        type: row?.type || null,
+        dateRange: row?.dateRange || null,
+        selectedPages: row?.selectedPages || null,
+        status: row?.status || null,
+        stopRequested: Boolean(row?.stopRequested),
+        downloadedCount: row?.downloadedCount || 0,
+        failedCount: row?.failedCount || 0,
+        retryCount: row?.retryCount || 0,
+        pagesProcessed: Array.isArray(row?.pagesProcessed)
+          ? row.pagesProcessed
+          : [],
+        startedAt: row?.startedAt || null,
+        finishedAt: row?.finishedAt || null,
+        exitCode: row?.exitCode ?? null,
+      })),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/ekapv3/files", async (req, res, next) => {
+  try {
+    const typeFilter = resolveEkapV3DownloadType(req.query.type);
+    const limit = Math.min(2000, Math.max(1, toInt(req.query.limit, 500)));
+    const targets = typeFilter ? [typeFilter] : ["mahkeme", "uyusmazlik"];
+
+    const grouped = await Promise.all(targets.map((type) => readEkapV3FilesByType(type)));
+    const rows = grouped
+      .flat()
+      .sort((a, b) => b.updatedAtMs - a.updatedAtMs)
+      .slice(0, limit);
+
+    const countByType = {
+      mahkeme: grouped[targets.indexOf("mahkeme")]?.length || 0,
+      uyusmazlik: grouped[targets.indexOf("uyusmazlik")]?.length || 0,
+    };
+
+    res.json({
+      data: rows.map((row) => ({
+        type: row.type,
+        fileName: row.fileName,
+        sizeBytes: row.sizeBytes,
+        updatedAt: row.updatedAt,
+      })),
+      meta: {
+        total: rows.length,
+        type: typeFilter || null,
+        countByType,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/ekapv3/files/download", async (req, res, next) => {
+  try {
+    const type = resolveEkapV3DownloadType(req.query.type);
+    if (!type) {
+      res.status(400).json({ error: "Geçersiz type. mahkeme veya uyusmazlik olmalı." });
+      return;
+    }
+
+    const fileName = String(req.query.fileName || "").trim();
+    if (!isSafeFileName(fileName)) {
+      res.status(400).json({ error: "Geçersiz dosya adı." });
+      return;
+    }
+
+    const dirPath = EKAP_V3_DOWNLOAD_DIRS[type];
+    const absolutePath = path.join(dirPath, fileName);
+    let stat;
+    try {
+      stat = await fs.promises.stat(absolutePath);
+    } catch (error) {
+      if (error?.code === "ENOENT") {
+        res.status(404).json({ error: "Dosya bulunamadı." });
+        return;
+      }
+      throw error;
+    }
+
+    if (!stat.isFile()) {
+      res.status(404).json({ error: "Dosya bulunamadı." });
+      return;
+    }
+
+    res.download(absolutePath, fileName);
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.get("/api/tenders", async (req, res, next) => {
@@ -734,7 +1240,10 @@ app.use((error, _, res, __) => {
 async function start() {
   mongoClient = new MongoClient(config.mongodbUri);
   await mongoClient.connect();
-  collection = mongoClient.db(config.mongodbDb).collection(config.mongodbCollection);
+  const db = mongoClient.db(config.mongodbDb);
+  collection = db.collection(config.mongodbCollection);
+  ekapV3LogCollection = db.collection(EKAP_V3_LOG_COLLECTION);
+  await ekapV3LogCollection.createIndex({ startedAt: -1, createdAt: -1 });
 
   app.listen(WEB_PORT, () => {
     console.log(`[WEB] UI hazir: http://127.0.0.1:${WEB_PORT}`);
