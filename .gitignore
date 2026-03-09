@@ -4,8 +4,6 @@ reports/
 .DS_Store
 *.log
 .env
-.env.dev
-.env.dev.local
 .venv/
 
 # EKAP v3 runtime artifacts (local only)
@@ -18,4 +16,3 @@ ekap-v3/**/*.part
 
 # Generated PDF output
 reports/pdfs/
-reports/pdfs-dev/

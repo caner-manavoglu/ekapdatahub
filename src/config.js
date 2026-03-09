@@ -1,26 +1,6 @@
-const fs = require("fs");
-const path = require("path");
 const dotenv = require("dotenv");
 
-function loadEnv() {
-  const envFileRaw = String(process.env.ENV_FILE || "").trim();
-  if (!envFileRaw) {
-    dotenv.config();
-    return;
-  }
-
-  const envFilePath = path.isAbsolute(envFileRaw)
-    ? envFileRaw
-    : path.resolve(process.cwd(), envFileRaw);
-
-  if (!fs.existsSync(envFilePath)) {
-    throw new Error(`ENV_FILE bulunamadi: ${envFilePath}`);
-  }
-
-  dotenv.config({ path: envFilePath });
-}
-
-loadEnv();
+dotenv.config();
 
 function toInt(value, fallback) {
   if (value === undefined || value === null || value === "") {
