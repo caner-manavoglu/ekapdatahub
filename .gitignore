@@ -5,3 +5,14 @@ reports/
 *.log
 .env
 .venv/
+
+# EKAP v3 runtime artifacts (local only)
+ekap-v3/chrome-profile/
+ekap-v3/indirilenler/
+ekap-v3/downloads-mahkeme/
+ekap-v3/downloads-uyusmazlik/
+ekap-v3/**/*.crdownload
+ekap-v3/**/*.part
+
+# Generated PDF output
+reports/pdfs/

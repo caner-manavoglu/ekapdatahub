@@ -17,6 +17,9 @@ function toBool(value, fallback) {
   return ["1", "true", "yes", "on"].includes(String(value).toLowerCase());
 }
 
+const dryRunFromEnv = toBool(process.env.DRY_RUN, false);
+const generatePdfDefault = dryRunFromEnv ? false : true;
+
 const config = {
   listUrl:
     process.env.EKAP_LIST_URL ||
@@ -34,11 +37,11 @@ const config = {
   mongodbUri: process.env.MONGODB_URI || "mongodb://127.0.0.1:27017",
   mongodbDb: process.env.MONGODB_DB || "ekap",
   mongodbCollection: process.env.MONGODB_COLLECTION || "ihale_detaylari",
-  generatePdf: toBool(process.env.GENERATE_PDF, true),
+  generatePdf: toBool(process.env.GENERATE_PDF, generatePdfDefault),
   pdfOutputDir: process.env.PDF_OUTPUT_DIR || "reports/pdfs",
   pdfFontPath: process.env.PDF_FONT_PATH || "",
   storeFullIlanContent: toBool(process.env.STORE_FULL_ILAN_CONTENT, false),
-  dryRun: toBool(process.env.DRY_RUN, false),
+  dryRun: dryRunFromEnv,
   storeRawHtml: toBool(process.env.STORE_RAW_HTML, true),
 };
 

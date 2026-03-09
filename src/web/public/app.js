@@ -10,12 +10,11 @@ const state = {
   selectedIlanIndex: 0,
   activeTab: "full",
   scrapeRunning: false,
+  listRequestToken: 0,
+  detailRequestToken: 0,
 };
 let scrapePollTimer = null;
-const IHALE_DURUM_TR_MAP = {
-  "2": "İlan yayımlanmış, katılıma açık",
-  "6": "İhale iptal edilmiş",
-};
+let scrapePollInFlight = false;
 
 const el = {
   searchForm: document.getElementById("searchForm"),
@@ -26,6 +25,7 @@ const el = {
   scrapeStatus: document.getElementById("scrapeStatus"),
   scrapeStartPageInput: document.getElementById("scrapeStartPageInput"),
   scrapeEndPageInput: document.getElementById("scrapeEndPageInput"),
+  scrapeAllPagesCheckbox: document.getElementById("scrapeAllPagesCheckbox"),
   tenderList: document.getElementById("tenderList"),
   cardTemplate: document.getElementById("tenderCardTemplate"),
   listMeta: document.getElementById("listMeta"),
@@ -37,8 +37,7 @@ const el = {
   detailIkn: document.getElementById("detailIkn"),
   detailTitle: document.getElementById("detailTitle"),
   detailIdare: document.getElementById("detailIdare"),
-  detailDurum: document.getElementById("detailDurum"),
-  detailUpdated: document.getElementById("detailUpdated"),
+  detailNotice: document.getElementById("detailNotice"),
   ilanSelect: document.getElementById("ilanSelect"),
   downloadFullPdfButton: document.getElementById("downloadFullPdfButton"),
   downloadSelectedPdfButton: document.getElementById("downloadSelectedPdfButton"),
@@ -95,40 +94,6 @@ function makeFrameDocument(title, contentHtml) {
 </html>`;
 }
 
-function normalizeDurumAciklama(value) {
-  const text = String(value || "").trim();
-  if (!text) {
-    return "";
-  }
-
-  const normalized = text.toLocaleLowerCase("tr-TR");
-  if (normalized.includes("canceled")) {
-    return "İhale iptal edilmiş";
-  }
-
-  if (normalized.includes("open for participation")) {
-    return "İlan yayımlanmış, katılıma açık";
-  }
-
-  return "";
-}
-
-function formatIhaleDurumu(detail) {
-  const code = String(detail?.ihaleDurum || detail?.ihaleBilgi?.ihaleDurum || "").trim();
-  if (!code) {
-    return "İhale Durumu: -";
-  }
-
-  const mappedText =
-    IHALE_DURUM_TR_MAP[code] || normalizeDurumAciklama(detail?.ihaleBilgi?.ihaleDurumAciklama);
-
-  if (mappedText) {
-    return `İhale Durumu: ${mappedText} (Kod: ${code})`;
-  }
-
-  return `İhale Durumu: Kod ${code}`;
-}
-
 function parseDownloadFileName(contentDisposition) {
   const value = String(contentDisposition || "");
   if (!value) {
@@ -146,6 +111,21 @@ function parseDownloadFileName(contentDisposition) {
 
   const basicMatch = value.match(/filename="?([^";]+)"?/i);
   return basicMatch?.[1] || "";
+}
+
+function withAuthHeaders(headers = {}) {
+  if (window.EkapAuth?.withCsrfHeaders) {
+    return window.EkapAuth.withCsrfHeaders(headers);
+  }
+  return {
+    ...headers,
+  };
+}
+
+function handleUnauthorizedResponse(response) {
+  if (response?.status === 401 && window.EkapAuth?.redirectToLogin) {
+    window.EkapAuth.redirectToLogin();
+  }
 }
 
 function updatePdfButtonsState() {
@@ -166,7 +146,7 @@ async function downloadCurrentIlanPdf(kind) {
   const ilanList = Array.isArray(state.selectedDetail?.ilanList) ? state.selectedDetail.ilanList : [];
 
   if (!state.selectedId || ilanList.length === 0) {
-    window.alert("PDF indirmek için önce bir kayıt ve ilan seçin.");
+    setDetailNotice("PDF indirmek için önce bir kayıt ve ilan seçin.", "error");
     return;
   }
 
@@ -186,7 +166,10 @@ async function downloadCurrentIlanPdf(kind) {
   }
 
   try {
-    const response = await fetch(url);
+    const response = await fetch(url, {
+      credentials: "same-origin",
+    });
+    handleUnauthorizedResponse(response);
     if (!response.ok) {
       let errorMessage = `${response.status} ${response.statusText}`;
       try {
@@ -217,16 +200,20 @@ async function downloadCurrentIlanPdf(kind) {
     anchor.click();
     anchor.remove();
     URL.revokeObjectURL(blobUrl);
+    setDetailNotice(`${fileName} indirildi.`, "success");
   } catch (error) {
     console.error(error);
-    window.alert(error?.message || "PDF indirilemedi.");
+    setDetailNotice(error?.message || "PDF indirilemedi.", "error");
   } finally {
     updatePdfButtonsState();
   }
 }
 
 async function fetchJson(url) {
-  const response = await fetch(url);
+  const response = await fetch(url, {
+    credentials: "same-origin",
+  });
+  handleUnauthorizedResponse(response);
   if (!response.ok) {
     const text = await response.text();
     throw new Error(`${response.status} ${response.statusText} - ${text}`);
@@ -237,11 +224,13 @@ async function fetchJson(url) {
 async function postJson(url, body) {
   const response = await fetch(url, {
     method: "POST",
-    headers: {
+    credentials: "same-origin",
+    headers: withAuthHeaders({
       "Content-Type": "application/json",
-    },
+    }),
     body: JSON.stringify(body || {}),
   });
+  handleUnauthorizedResponse(response);
 
   const text = await response.text();
   let payload = {};
@@ -267,16 +256,94 @@ function setScrapeStatus(message, type = "neutral") {
   if (type === "running") {
     el.scrapeStatus.style.borderColor = "rgba(255, 214, 10, 0.6)";
     el.scrapeStatus.style.background = "rgba(255, 214, 10, 0.16)";
-    el.scrapeStatus.style.color = "#fff";
+    el.scrapeStatus.style.color = "#604a00";
   } else if (type === "success") {
     el.scrapeStatus.style.borderColor = "rgba(71, 211, 190, 0.65)";
     el.scrapeStatus.style.background = "rgba(71, 211, 190, 0.16)";
-    el.scrapeStatus.style.color = "#fff";
+    el.scrapeStatus.style.color = "#0b5d4f";
   } else if (type === "error") {
     el.scrapeStatus.style.borderColor = "rgba(255, 107, 107, 0.65)";
     el.scrapeStatus.style.background = "rgba(255, 107, 107, 0.16)";
-    el.scrapeStatus.style.color = "#fff";
+    el.scrapeStatus.style.color = "#8f2f2a";
   }
+}
+
+function applyScrapeAllPagesUi() {
+  const checked = Boolean(el.scrapeAllPagesCheckbox?.checked);
+  [el.scrapeStartPageInput, el.scrapeEndPageInput].forEach((input) => {
+    if (!input) return;
+    input.disabled = checked;
+    input.readOnly = checked;
+    input.classList.toggle("is-disabled", checked);
+  });
+}
+
+function setDetailNotice(message, type = "neutral") {
+  if (!el.detailNotice) {
+    return;
+  }
+
+  const text = String(message || "").trim();
+  el.detailNotice.classList.remove("is-neutral", "is-success", "is-error");
+
+  if (!text) {
+    el.detailNotice.textContent = "";
+    el.detailNotice.hidden = true;
+    return;
+  }
+
+  el.detailNotice.textContent = text;
+  el.detailNotice.hidden = false;
+
+  if (type === "success") {
+    el.detailNotice.classList.add("is-success");
+    return;
+  }
+
+  if (type === "error") {
+    el.detailNotice.classList.add("is-error");
+    return;
+  }
+
+  el.detailNotice.classList.add("is-neutral");
+}
+
+function getErrorMessage(error, fallbackMessage = "Beklenmeyen bir hata oluştu.") {
+  const message = error?.message;
+  if (typeof message === "string" && message.trim()) {
+    return message.trim();
+  }
+  return fallbackMessage;
+}
+
+function runSafeAsync(task, onError) {
+  try {
+    const result = task();
+    Promise.resolve(result).catch(onError);
+  } catch (error) {
+    onError(error);
+  }
+}
+
+function withAsyncError(handler, onError) {
+  return (event) => {
+    runSafeAsync(() => handler(event), onError);
+  };
+}
+
+function handleListError(error, fallbackMessage = "Liste yüklenemedi.") {
+  console.error(error);
+  el.tenderList.innerHTML = `<p>Hata: ${escapeHtml(getErrorMessage(error, fallbackMessage))}</p>`;
+}
+
+function handleScrapeError(error, fallbackMessage = "Scrape işlemi başarısız.") {
+  console.error(error);
+  setScrapeStatus(getErrorMessage(error, fallbackMessage), "error");
+}
+
+function handlePdfError(error, fallbackMessage = "PDF indirilemedi.") {
+  console.error(error);
+  setDetailNotice(getErrorMessage(error, fallbackMessage), "error");
 }
 
 async function syncScrapeStatus() {
@@ -291,6 +358,8 @@ async function syncScrapeStatus() {
       const range = data.currentRunOptions?.pageRange;
       if (data.stopRequested) {
         setScrapeStatus("Durduruluyor", "running");
+      } else if (range?.allPages) {
+        setScrapeStatus("Çalışıyor (Tüm sayfalar)", "running");
       } else if (range?.startPage && range?.endPage) {
         setScrapeStatus(`Çalışıyor (Sayfa ${range.startPage}-${range.endPage})`, "running");
       } else {
@@ -328,12 +397,25 @@ function startScrapePolling() {
     return;
   }
 
-  scrapePollTimer = setInterval(async () => {
-    const data = await syncScrapeStatus();
-    if (!data?.running) {
-      stopScrapePolling();
-      await loadList();
+  scrapePollTimer = setInterval(() => {
+    if (scrapePollInFlight) {
+      return;
     }
+    scrapePollInFlight = true;
+
+    void (async () => {
+      try {
+        const data = await syncScrapeStatus();
+        if (!data?.running) {
+          stopScrapePolling();
+          await loadList();
+        }
+      } catch (error) {
+        handleListError(error, "Liste yenilenemedi.");
+      } finally {
+        scrapePollInFlight = false;
+      }
+    })();
   }, 2_000);
 }
 
@@ -343,9 +425,19 @@ function stopScrapePolling() {
   }
   clearInterval(scrapePollTimer);
   scrapePollTimer = null;
+  scrapePollInFlight = false;
 }
 
 function getScrapeRangePayload() {
+  const allPages = Boolean(el.scrapeAllPagesCheckbox?.checked);
+  if (allPages) {
+    return {
+      allPages: true,
+      startPage: 1,
+      endPage: null,
+    };
+  }
+
   const startPageRaw = Number.parseInt(el.scrapeStartPageInput.value || "1", 10);
   const endPageRaw = Number.parseInt(el.scrapeEndPageInput.value || "1", 10);
 
@@ -356,12 +448,14 @@ function getScrapeRangePayload() {
   el.scrapeEndPageInput.value = String(endPage);
 
   return {
+    allPages: false,
     startPage,
     endPage,
   };
 }
 
 async function loadList() {
+  const requestToken = ++state.listRequestToken;
   const params = new URLSearchParams();
   params.set("page", String(state.page));
   params.set("limit", String(state.limit));
@@ -371,6 +465,9 @@ async function loadList() {
 
   el.tenderList.innerHTML = "<p>Yükleniyor...</p>";
   const payload = await fetchJson(`/api/tenders?${params.toString()}`);
+  if (requestToken !== state.listRequestToken) {
+    return;
+  }
 
   state.list = payload.data || [];
   state.total = payload.meta?.total || 0;
@@ -424,11 +521,19 @@ function renderList() {
     fragment.querySelector(".tender-card__preview").textContent = preview;
     fragment.querySelector(".tender-card__meta").textContent = `Güncellendi: ${formatDate(tender.updatedAt)}`;
 
-    card.addEventListener("click", () => selectTender(tender._id));
+    card.addEventListener("click", () => {
+      runSafeAsync(
+        () => selectTender(tender._id),
+        (error) => handleListError(error, "Detay yüklenemedi."),
+      );
+    });
     card.addEventListener("keydown", (event) => {
       if (event.key === "Enter" || event.key === " ") {
         event.preventDefault();
-        selectTender(tender._id);
+        runSafeAsync(
+          () => selectTender(tender._id),
+          (error) => handleListError(error, "Detay yüklenemedi."),
+        );
       }
     });
 
@@ -452,7 +557,11 @@ async function selectTender(id) {
 }
 
 async function loadDetail(id) {
+  const requestToken = ++state.detailRequestToken;
   const payload = await fetchJson(`/api/tenders/${encodeURIComponent(id)}`);
+  if (requestToken !== state.detailRequestToken) {
+    return;
+  }
   state.selectedDetail = payload.data || null;
   state.selectedIlanIndex = 0;
   renderDetail();
@@ -461,6 +570,7 @@ async function loadDetail(id) {
 function renderEmptyDetail() {
   el.detailView.hidden = true;
   el.emptyState.hidden = false;
+  setDetailNotice("");
   updatePdfButtonsState();
 }
 
@@ -477,8 +587,7 @@ function renderDetail() {
   el.detailIkn.textContent = detail.ikn || "İKN yok";
   el.detailTitle.textContent = detail.ihaleAdi || "Başlık yok";
   el.detailIdare.textContent = detail.idareAdi || "İdare bilgisi yok";
-  el.detailDurum.textContent = formatIhaleDurumu(detail);
-  el.detailUpdated.textContent = `Güncelleme: ${formatDate(detail.updatedAt)}`;
+  setDetailNotice("");
 
   const ilanList = Array.isArray(detail.ilanList) ? detail.ilanList : [];
   el.ilanSelect.innerHTML = "";
@@ -521,77 +630,102 @@ function renderActiveTab() {
   el.summaryViewer.hidden = tab !== "summary";
 
   for (const tabButton of el.tabs) {
-    tabButton.classList.toggle("is-active", tabButton.dataset.tab === tab);
+    const isActive = tabButton.dataset.tab === tab;
+    tabButton.classList.toggle("is-active", isActive);
+    tabButton.setAttribute("aria-selected", isActive ? "true" : "false");
+    tabButton.tabIndex = isActive ? 0 : -1;
   }
 }
 
-el.searchForm.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  state.q = el.searchInput.value.trim();
-  state.page = 1;
-  state.selectedId = null;
-  await loadList();
-});
+el.searchForm.addEventListener(
+  "submit",
+  withAsyncError(async (event) => {
+    event.preventDefault();
+    state.q = el.searchInput.value.trim();
+    state.page = 1;
+    state.selectedId = null;
+    await loadList();
+  }, (error) => handleListError(error, "Liste yüklenemedi.")),
+);
 
-el.refreshButton.addEventListener("click", async () => {
-  await loadList();
-});
+el.refreshButton.addEventListener(
+  "click",
+  withAsyncError(async () => {
+    await loadList();
+  }, (error) => handleListError(error, "Liste yenilenemedi.")),
+);
 
-el.scrapeButton.addEventListener("click", async () => {
-  if (state.scrapeRunning) {
-    return;
-  }
+if (el.scrapeAllPagesCheckbox) {
+  el.scrapeAllPagesCheckbox.addEventListener("change", () => {
+    applyScrapeAllPagesUi();
+  });
+}
 
-  const payload = getScrapeRangePayload();
+el.scrapeButton.addEventListener(
+  "click",
+  withAsyncError(async () => {
+    if (state.scrapeRunning) {
+      return;
+    }
 
-  state.scrapeRunning = true;
-  el.scrapeButton.disabled = true;
-  el.stopScrapeButton.disabled = false;
-  setScrapeStatus(`Çalışıyor (Sayfa ${payload.startPage}-${payload.endPage})`, "running");
+    const payload = getScrapeRangePayload();
 
-  try {
-    await postJson("/api/scrape/run", payload);
-    await syncScrapeStatus();
-    startScrapePolling();
-  } catch (error) {
-    console.error(error);
-    state.scrapeRunning = false;
-    el.scrapeButton.disabled = false;
-    el.stopScrapeButton.disabled = true;
-    setScrapeStatus(error.message || "Hata", "error");
-  }
-});
+    state.scrapeRunning = true;
+    el.scrapeButton.disabled = true;
+    el.stopScrapeButton.disabled = false;
+    if (payload.allPages) {
+      setScrapeStatus("Çalışıyor (Tüm sayfalar)", "running");
+    } else {
+      setScrapeStatus(`Çalışıyor (Sayfa ${payload.startPage}-${payload.endPage})`, "running");
+    }
 
-el.stopScrapeButton.addEventListener("click", async () => {
-  if (!state.scrapeRunning) {
-    return;
-  }
+    try {
+      await postJson("/api/scrape/run", payload);
+      await syncScrapeStatus();
+      startScrapePolling();
+    } catch (error) {
+      state.scrapeRunning = false;
+      el.scrapeButton.disabled = false;
+      el.stopScrapeButton.disabled = true;
+      throw error;
+    }
+  }, (error) => handleScrapeError(error, "Scrape başlatılamadı.")),
+);
 
-  try {
+el.stopScrapeButton.addEventListener(
+  "click",
+  withAsyncError(async () => {
+    if (!state.scrapeRunning) {
+      return;
+    }
+
     await postJson("/api/scrape/stop", {});
     setScrapeStatus("Durdurma istendi", "running");
     startScrapePolling();
-  } catch (error) {
-    console.error(error);
-    setScrapeStatus(error.message || "Hata", "error");
-  }
-});
+  }, (error) => handleScrapeError(error, "Scrape durdurma isteği gönderilemedi.")),
+);
 
-el.prevPageButton.addEventListener("click", async () => {
-  if (state.page <= 1) {
-    return;
-  }
-  state.page -= 1;
-  await loadList();
-});
+el.prevPageButton.addEventListener(
+  "click",
+  withAsyncError(async () => {
+    if (state.page <= 1) {
+      return;
+    }
+    state.page -= 1;
+    await loadList();
+  }, (error) => handleListError(error, "Önceki sayfa yüklenemedi.")),
+);
 
-el.nextPageButton.addEventListener("click", async () => {
-  if (state.page >= state.totalPages) {
-    return;
-  }
-  state.page += 1;
-  await loadList();
-});
+el.nextPageButton.addEventListener(
+  "click",
+  withAsyncError(async () => {
+    if (state.page >= state.totalPages) {
+      return;
+    }
+    state.page += 1;
+    await loadList();
+  }, (error) => handleListError(error, "Sonraki sayfa yüklenemedi.")),
+);
 
 el.ilanSelect.addEventListener("change", () => {
   state.selectedIlanIndex = Number.parseInt(el.ilanSelect.value, 10) || 0;
@@ -599,15 +733,21 @@ el.ilanSelect.addEventListener("change", () => {
 });
 
 if (el.downloadFullPdfButton) {
-  el.downloadFullPdfButton.addEventListener("click", async () => {
-    await downloadCurrentIlanPdf("full");
-  });
+  el.downloadFullPdfButton.addEventListener(
+    "click",
+    withAsyncError(async () => {
+      await downloadCurrentIlanPdf("full");
+    }, (error) => handlePdfError(error, "Tam PDF indirilemedi.")),
+  );
 }
 
 if (el.downloadSelectedPdfButton) {
-  el.downloadSelectedPdfButton.addEventListener("click", async () => {
-    await downloadCurrentIlanPdf("selected");
-  });
+  el.downloadSelectedPdfButton.addEventListener(
+    "click",
+    withAsyncError(async () => {
+      await downloadCurrentIlanPdf("selected");
+    }, (error) => handlePdfError(error, "Seçili alan PDF indirilemedi.")),
+  );
 }
 
 for (const tabButton of el.tabs) {
@@ -615,14 +755,48 @@ for (const tabButton of el.tabs) {
     state.activeTab = tabButton.dataset.tab;
     renderActiveTab();
   });
+
+  tabButton.addEventListener("keydown", (event) => {
+    if (el.tabs.length < 2) {
+      return;
+    }
+
+    const currentIndex = el.tabs.indexOf(tabButton);
+    if (currentIndex < 0) {
+      return;
+    }
+
+    let nextIndex = currentIndex;
+    if (event.key === "ArrowRight") {
+      nextIndex = (currentIndex + 1) % el.tabs.length;
+    } else if (event.key === "ArrowLeft") {
+      nextIndex = (currentIndex - 1 + el.tabs.length) % el.tabs.length;
+    } else if (event.key === "Home") {
+      nextIndex = 0;
+    } else if (event.key === "End") {
+      nextIndex = el.tabs.length - 1;
+    } else {
+      return;
+    }
+
+    event.preventDefault();
+    const nextTab = el.tabs[nextIndex];
+    state.activeTab = nextTab.dataset.tab;
+    renderActiveTab();
+    nextTab.focus();
+  });
 }
 
 (async () => {
   try {
+    if (window.EkapAuth?.ready) {
+      await window.EkapAuth.ready;
+    }
     const data = await syncScrapeStatus();
     if (data?.running) {
       startScrapePolling();
     }
+    applyScrapeAllPagesUi();
     await loadList();
   } catch (error) {
     console.error(error);

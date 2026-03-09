@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>EKAP Dokümantasyon Görüntüleyici</title>
+    <title>EKAP Panel Seçimi</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -17,122 +17,38 @@
     <header class="topbar">
       <div class="topbar__brand">
         <p class="eyebrow">EKAP DATA HUB</p>
-        <h1>Dokümantasyon Karşılaştırma Paneli</h1>
+        <h1>Panel Seçimi</h1>
       </div>
-      <form id="searchForm" class="topbar__actions" autocomplete="off">
-        <a href="/indirilenler" class="btn btn--ghost btn--link">İndirilenler</a>
-        <a href="/ekapv3.html" class="btn btn--ghost btn--link">EKAP v3</a>
-        <input
-          id="searchInput"
-          name="q"
-          type="search"
-          placeholder="İKN, ihale adı veya idare adı ara"
-        />
-        <button type="submit" class="btn btn--primary">Ara</button>
-        <button type="button" id="refreshButton" class="btn btn--ghost">Yenile</button>
-        <div class="topbar__field">
-          <label for="scrapeStartPageInput">Başlangıç Sayfası</label>
-          <input
-            id="scrapeStartPageInput"
-            name="scrapeStartPage"
-            type="number"
-            min="1"
-            step="1"
-            value="1"
-            title="Başlangıç sayfası"
-            aria-label="Başlangıç sayfası"
-          />
-        </div>
-        <div class="topbar__field">
-          <label for="scrapeEndPageInput">Bitiş Sayfası</label>
-          <input
-            id="scrapeEndPageInput"
-            name="scrapeEndPage"
-            type="number"
-            min="1"
-            step="1"
-            value="1"
-            title="Bitiş sayfası"
-            aria-label="Bitiş sayfası"
-          />
-        </div>
-        <button type="button" id="scrapeButton" class="btn btn--accent">Verileri Çek</button>
-        <button type="button" id="stopScrapeButton" class="btn btn--danger" disabled>Durdur</button>
-        <span id="scrapeStatus" class="meta-pill">Scrape: Hazır</span>
-      </form>
+      <div class="topbar__actions">
+        <a href="/" class="btn btn--ghost btn--link is-active" aria-current="page">Ana Sayfa</a>
+        <button type="button" class="btn btn--ghost" data-auth-logout hidden>Çıkış</button>
+      </div>
     </header>
 
-    <main class="layout">
-      <aside class="panel panel--list">
+    <main class="layout layout--single hub-main">
+      <section class="panel panel--detail hub-panel">
         <div class="panel__head">
-          <h2>İhale Listesi</h2>
-          <span id="listMeta" class="meta-pill">-</span>
+          <h2>Giriş Başarılı</h2>
+          <span class="hub-label">Yönlendirme</span>
         </div>
-        <div id="tenderList" class="tender-list"></div>
-        <div class="pager">
-          <button id="prevPageButton" class="btn btn--ghost" type="button">Önceki</button>
-          <span id="pageMeta" class="pager__meta">Sayfa 1 / 1</span>
-          <button id="nextPageButton" class="btn btn--ghost" type="button">Sonraki</button>
-        </div>
-      </aside>
+        <div class="hub-grid">
+          <a href="/panel/dokumantasyon" class="hub-card">
+            <p class="eyebrow">KLASİK EKAP</p>
+            <h3>Dokümantasyon Karşılaştırma</h3>
+            <p>İhale listesini görüntüleyin, detayları karşılaştırın ve PDF indirin.</p>
+            <span class="hub-card__cta">Panele Git</span>
+          </a>
 
-      <section class="panel panel--detail">
-        <div id="emptyState" class="empty-state">
-          <h3>Kayıt seçin</h3>
-          <p>Listeden bir ihale seçtiğinizde tam dokümantasyon ve seçili alanlar burada görünecek.</p>
-        </div>
-
-        <div id="detailView" class="detail" hidden>
-          <div class="detail__head">
-            <div>
-              <p id="detailIkn" class="eyebrow"></p>
-              <h2 id="detailTitle"></h2>
-              <p id="detailIdare" class="detail__idare"></p>
-            </div>
-            <div class="detail__badges">
-              <span id="detailDurum" class="meta-pill"></span>
-              <span id="detailUpdated" class="meta-pill"></span>
-            </div>
-          </div>
-
-          <div class="detail__toolbar">
-            <label for="ilanSelect">İlan</label>
-            <select id="ilanSelect"></select>
-            <button id="downloadFullPdfButton" class="btn btn--ghost" type="button">Tam Metin PDF</button>
-            <button id="downloadSelectedPdfButton" class="btn btn--ghost" type="button">
-              Seçili Alanlar PDF
-            </button>
-            <div class="tab-group" role="tablist" aria-label="Gorunum sekmesi">
-              <button class="tab is-active" data-tab="full" type="button">Tam Doküman</button>
-              <button class="tab" data-tab="summary" type="button">Seçili Alanlar</button>
-            </div>
-          </div>
-
-          <div class="viewer-grid">
-            <section class="viewer-card" data-view="full">
-              <h3>Tam Dokümantasyon (HTML)</h3>
-              <iframe id="fullDocFrame" class="doc-frame" sandbox=""></iframe>
-            </section>
-
-            <section class="viewer-card" data-view="summary" hidden>
-              <h3>Seçili Alanlar Özeti</h3>
-              <pre id="summaryText" class="text-block"></pre>
-            </section>
-          </div>
+          <a href="/panel/ekapv3" class="hub-card">
+            <p class="eyebrow">EKAP v3</p>
+            <h3>Başlat / Durdur ve Dosya Yönetimi</h3>
+            <p>v3 indirme süreçlerini başlatın, geçmişi izleyin ve dosyaları yönetin.</p>
+            <span class="hub-card__cta">Panele Git</span>
+          </a>
         </div>
       </section>
     </main>
 
-    <template id="tenderCardTemplate">
-      <article class="tender-card" tabindex="0" role="button">
-        <p class="tender-card__ikn"></p>
-        <h3 class="tender-card__title"></h3>
-        <p class="tender-card__idare"></p>
-        <p class="tender-card__preview"></p>
-        <p class="tender-card__meta"></p>
-      </article>
-    </template>
-
-    <script src="/app.js" defer></script>
+    <script src="/auth.js" defer></script>
   </body>
 </html>

@@ -17,12 +17,14 @@
     <header class="topbar">
       <div class="topbar__brand">
         <p class="eyebrow">EKAP DATA HUB</p>
-        <h1>EKAP v3 Start/Stop Yönetimi</h1>
+        <h1>EKAP v3 Başlat/Durdur Yönetimi</h1>
       </div>
       <div class="topbar__actions">
-        <a href="/" class="btn btn--ghost btn--link">Ana Sayfa</a>
-        <a href="/indirilenler" class="btn btn--ghost btn--link">İndirilenler</a>
-        <span id="v3Status" class="meta-pill">Hazır</span>
+        <a href="/" class="btn btn--ghost btn--link">Proje Seçimi</a>
+        <span class="btn btn--ghost btn--link is-active" aria-current="page">EKAP v3</span>
+        <button type="button" class="btn btn--ghost" data-auth-logout hidden>Çıkış</button>
+        <button type="button" id="v3OpenDownloadsButton" class="btn btn--ghost">Klasörü Aç</button>
+        <span id="v3Status" class="meta-pill" aria-live="polite" aria-atomic="true">Hazır</span>
       </div>
     </header>
 
@@ -63,18 +65,23 @@
                 <input id="endPage" type="number" min="1" step="1" value="1" required />
               </label>
 
+              <label class="v3-field v3-field--check" for="allPages">
+                <input id="allPages" type="checkbox" />
+                <span>Tüm sayfaları indir</span>
+              </label>
+
               <label class="v3-field">
-                <span>Browser Mode</span>
+                <span>Tarayıcı Modu</span>
                 <select id="browserMode">
-                  <option value="headless">headless</option>
-                  <option value="visible">visible</option>
+                  <option value="headless">Gizli (headless)</option>
+                  <option value="visible">Görünür</option>
                 </select>
               </label>
             </div>
 
             <div class="v3-actions">
-              <button type="submit" id="startButton" class="btn btn--accent">Start</button>
-              <button type="button" id="stopButton" class="btn btn--danger" disabled>Stop</button>
+              <button type="submit" id="startButton" class="btn btn--accent">Başlat</button>
+              <button type="button" id="stopButton" class="btn btn--danger" disabled>Durdur</button>
             </div>
           </form>
         </div>
@@ -131,12 +138,28 @@
             <button type="button" id="v3FilesRefreshButton" class="btn btn--ghost">
               Listeyi Yenile
             </button>
+            <button type="button" id="v3DeleteSelectedButton" class="btn btn--danger" disabled>
+              Seçilenleri Sil
+            </button>
+            <button type="button" id="v3DeleteByTypeButton" class="btn btn--ghost btn--danger-muted" disabled>
+              Türü Toplu Sil
+            </button>
+            <button type="button" id="v3DeleteAllButton" class="btn btn--ghost btn--danger-muted">
+              Tümünü Sil
+            </button>
           </div>
         </div>
         <div class="downloads-table-wrap">
           <table class="downloads-table">
             <thead>
               <tr>
+                <th>
+                  <input
+                    type="checkbox"
+                    id="v3SelectAllFilesCheckbox"
+                    aria-label="Tüm dosyaları seç"
+                  />
+                </th>
                 <th>Tarih</th>
                 <th>Tür</th>
                 <th>Dosya</th>
@@ -150,6 +173,27 @@
       </section>
     </main>
 
+    <div id="v3ConfirmOverlay" class="confirm-overlay" hidden>
+      <div class="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="v3ConfirmTitle">
+        <h2 id="v3ConfirmTitle">Silme Onayı</h2>
+        <p id="v3ConfirmMessage"></p>
+        <p class="confirm-hint">Devam etmek için <strong>onaylıyorum</strong> yazın.</p>
+        <input
+          id="v3ConfirmInput"
+          type="text"
+          autocomplete="off"
+          placeholder="onaylıyorum"
+          aria-label="EKAP v3 dosya silme onayı"
+        />
+        <p id="v3ConfirmError" class="confirm-error" hidden>Onay metni hatalı.</p>
+        <div class="confirm-actions">
+          <button id="v3CancelConfirmButton" type="button" class="btn btn--ghost">Vazgeç</button>
+          <button id="v3ApproveConfirmButton" type="button" class="btn btn--danger">Sil</button>
+        </div>
+      </div>
+    </div>
+
+    <script src="/auth.js" defer></script>
     <script src="/ekapv3.js" defer></script>
   </body>
 </html>

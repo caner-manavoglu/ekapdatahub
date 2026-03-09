@@ -5,9 +5,14 @@
   "type": "commonjs",
   "scripts": {
     "start": "node src/index.js",
-    "start:dry": "DRY_RUN=true node src/index.js",
+    "start:dry": "DRY_RUN=true GENERATE_PDF=false node src/index.js",
     "web": "node src/web/server.js",
-    "test": "node --test"
+    "migrate:legacy-downloads": "node scripts/migrate-legacy-downloads.js",
+    "db:audit-indexes": "node scripts/db-index-audit.js",
+    "test": "node --test",
+    "check:syntax": "node scripts/check-syntax.js",
+    "check:repo": "node scripts/repo-guard.js",
+    "ci": "npm run check:syntax && npm run check:repo && npm test"
   },
   "dependencies": {
     "axios": "^1.8.4",

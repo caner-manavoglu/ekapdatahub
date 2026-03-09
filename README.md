@@ -45,10 +45,25 @@ Sadece test amaçlı (MongoDB'ye yazmadan):
 npm run start:dry
 ```
 
+`start:dry` varsayılan olarak PDF üretmez.
+Dry-run sırasında özellikle PDF üretmek isterseniz `GENERATE_PDF=true` verilebilir.
+
 Testleri çalıştırmak için:
 
 ```bash
 npm test
+```
+
+CI kontrol setini (syntax + repo guard + test) çalıştırmak için:
+
+```bash
+npm run ci
+```
+
+Mongo index denetimini (`explain` dahil) çalıştırmak için:
+
+```bash
+npm run db:audit-indexes
 ```
 
 Frontend arayüzünü başlatmak için:
@@ -59,17 +74,29 @@ npm run web
 
 Arayüz: `http://127.0.0.1:8787`
 
-Bu komut tek başına yeterlidir. Arayüzdeki `Verileri Çek` butonu scraper'ı tetikler.
-Arayüzde başlangıç/bitiş sayfasını seçerek aralıklı çekim yapabilir, `Durdur` butonuyla çalışan işlemi sonlandırabilirsiniz.
-`/indirilenler` sayfasında çekim tarihine göre kayıtları listeleyebilir, seçili kayıtları veya seçilen tarihin tamamını silebilirsiniz.
+Bu komut tek başına yeterlidir. Login sonrası ana sayfada iki seçenek görünür:
+- `Dokümantasyon` (`/dokumantasyon`)
+- `EKAP v3` (`/ekapv3.html`)
+
+`Dokümantasyon` sayfasında `Verileri Çek`/`Durdur` ile klasik scrape akışını yönetebilirsiniz.
+`/indirilenler` sayfasında çekim tarihine göre kayıtları listeleyebilir, metin araması yapabilir, seçili kayıtları veya seçilen tarihin tamamını silebilirsiniz.
 Silme işlemleri için `onaylıyorum` metni zorunludur.
+`AUTH_ENABLED=true` ise panele giriş zorunludur (`/login`).
+
+Eski klasör yapısından (`ekap-v3/downloads-mahkeme`, `ekap-v3/downloads-uyusmazlik`) yeni yapıya tek seferlik geçiş gerekiyorsa:
+
+```bash
+npm run migrate:legacy-downloads
+```
+
+Not: Bu migration komutu geçiş dönemi içindir ve 30 Eylül 2026 sonrası kaldırılması planlanmıştır.
 
 ## Ortam Değişkenleri
 
 - `MONGODB_URI`: Mongo bağlantısı
 - `MONGODB_DB`: Veritabanı adı
 - `MONGODB_COLLECTION`: Koleksiyon adı
-- `GENERATE_PDF`: `true` ise her satır için PDF oluşturur
+- `GENERATE_PDF`: `true` ise her satır için PDF oluşturur (`DRY_RUN=true` iken belirtilmezse varsayılan `false`)
 - `PDF_OUTPUT_DIR`: PDF çıktı klasörü
 - `PDF_FONT_PATH`: PDF için kullanılacak Unicode font dosya yolu (öneri: `Arial Unicode.ttf`)
 - `STORE_FULL_ILAN_CONTENT`: `true` ise ham detay içeriğini de `raw` alanına yazar
@@ -83,6 +110,22 @@ Silme işlemleri için `onaylıyorum` metni zorunludur.
 - `STORE_RAW_HTML`: `STORE_FULL_ILAN_CONTENT=true` ise orijinal `veriHtml` saklanır
 - `DRY_RUN`: `true` ise Mongo'ya yazmaz
 - `WEB_PORT`: Frontend/API sunucu portu
+- `WEB_HOST`: Sunucunun bind adresi (varsayılan `127.0.0.1`, uzak erişim için `0.0.0.0`)
+- `AUTH_ENABLED`: `true` ise web panel ve API auth kontrolü aktif olur
+- `AUTH_COOKIE_NAME`: Oturum cookie adı
+- `AUTH_COOKIE_SECURE`: `true` ise cookie sadece HTTPS üzerinden gönderilir
+- `AUTH_TRUST_PROXY`: `true` ise rate-limit IP tespiti için proxy zinciri (`req.ips` / `x-forwarded-for`) kullanılır
+- `AUTH_SESSION_TTL_MS`: Oturum süresi (ms)
+- `AUTH_LOGIN_WINDOW_MS`: Hatalı login denemesi pencere süresi (ms)
+- `AUTH_LOGIN_MAX_ATTEMPTS`: Pencere başına izin verilen maksimum hatalı deneme
+- `AUTH_USERS`: JSON dizi (username/password/role). Password: `plain:<sifre>` veya `sha256:<hex>`
+- `AUDIT_LOG_COLLECTION`: Silme gibi yıkıcı işlemler için audit kayıt koleksiyonu
+
+## Rol Yetkileri (auth aktifken)
+
+- `viewer`: okuma endpointleri (`GET /api/tenders*`, `GET /api/downloads*`, `GET /api/ekapv3/*`)
+- `operator`: `viewer` + çalıştır/durdur (`POST /api/scrape/*`, `POST /api/ekapv3/start`, `POST /api/ekapv3/stop`, `POST /api/ekapv3/files/open-dir`)
+- `admin`: `operator` + silme endpointleri (`POST /api/downloads/delete`, `POST /api/ekapv3/files/delete`)
 
 ## MongoDB Doküman Yapısı (özet)
 

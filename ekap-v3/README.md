@@ -62,8 +62,8 @@ Notlar:
 
 - Geriye uyumluluk için eski `--headless=true|false` parametresi de çalışır.
 - İndirme klasörleri:
-- `mahkeme`: `downloads-mahkeme`
-- `uyusmazlik`: `downloads-uyusmazlik`
+- `mahkeme`: `indirilenler/mahkeme`
+- `uyusmazlik`: `indirilenler/uyusmazlik`
 
 ## Timeout Retry Davranışı
 

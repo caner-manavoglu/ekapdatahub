@@ -1,3 +1,5 @@
+const DELETE_CONFIRMATION_TEXT = "onaylıyorum";
+
 const state = {
   running: false,
   stopRequested: false,
@@ -6,17 +8,27 @@ const state = {
   logs: [],
   history: [],
   files: [],
+  selectedFileKeys: new Set(),
+  pendingDeleteAction: null,
+  confirmBusy: false,
+  lastFocusedElement: null,
 };
+let statusPollInFlight = false;
+let filesPollInFlight = false;
+let statusPollFailureCount = 0;
+let filesPollFailureCount = 0;
 
 const el = {
   status: document.getElementById("v3Status"),
   runMeta: document.getElementById("v3RunMeta"),
   form: document.getElementById("v3Form"),
+  openDownloadsButton: document.getElementById("v3OpenDownloadsButton"),
   jobType: document.getElementById("jobType"),
   fromDate: document.getElementById("fromDate"),
   toDate: document.getElementById("toDate"),
   startPage: document.getElementById("startPage"),
   endPage: document.getElementById("endPage"),
+  allPages: document.getElementById("allPages"),
   browserMode: document.getElementById("browserMode"),
   startButton: document.getElementById("startButton"),
   stopButton: document.getElementById("stopButton"),
@@ -27,7 +39,33 @@ const el = {
   filesBody: document.getElementById("v3FilesBody"),
   filesTypeFilter: document.getElementById("v3FilesTypeFilter"),
   filesRefreshButton: document.getElementById("v3FilesRefreshButton"),
+  selectAllFilesCheckbox: document.getElementById("v3SelectAllFilesCheckbox"),
+  deleteSelectedButton: document.getElementById("v3DeleteSelectedButton"),
+  deleteByTypeButton: document.getElementById("v3DeleteByTypeButton"),
+  deleteAllButton: document.getElementById("v3DeleteAllButton"),
+  confirmOverlay: document.getElementById("v3ConfirmOverlay"),
+  confirmTitle: document.getElementById("v3ConfirmTitle"),
+  confirmMessage: document.getElementById("v3ConfirmMessage"),
+  confirmInput: document.getElementById("v3ConfirmInput"),
+  confirmError: document.getElementById("v3ConfirmError"),
+  cancelConfirmButton: document.getElementById("v3CancelConfirmButton"),
+  approveConfirmButton: document.getElementById("v3ApproveConfirmButton"),
 };
+
+function withAuthHeaders(headers = {}) {
+  if (window.EkapAuth?.withCsrfHeaders) {
+    return window.EkapAuth.withCsrfHeaders(headers);
+  }
+  return {
+    ...headers,
+  };
+}
+
+function handleUnauthorizedResponse(response) {
+  if (response?.status === 401 && window.EkapAuth?.redirectToLogin) {
+    window.EkapAuth.redirectToLogin();
+  }
+}
 
 function escapeHtml(value) {
   return String(value || "")
@@ -62,8 +100,59 @@ function parsePositiveInt(value, fallback) {
   return parsed;
 }
 
+function formatPageRange(runLike) {
+  const allPages = Boolean(runLike?.allPages);
+  if (allPages) {
+    return "Tümü";
+  }
+  const startPage = runLike?.startPage ?? "-";
+  const endPage = runLike?.endPage ?? "-";
+  return `${startPage}-${endPage}`;
+}
+
+function applyAllPagesUi() {
+  const checked = Boolean(el.allPages?.checked);
+  [el.startPage, el.endPage].forEach((input) => {
+    if (!input) return;
+    input.disabled = checked;
+    input.readOnly = checked;
+    input.classList.toggle("is-disabled", checked);
+    if (checked) {
+      input.setAttribute("aria-disabled", "true");
+      if (document.activeElement === input) {
+        input.blur();
+      }
+    } else {
+      input.removeAttribute("aria-disabled");
+    }
+  });
+}
+
+function normalizeConfirmation(value) {
+  return String(value || "").trim().toLocaleLowerCase("tr-TR");
+}
+
+function buildFileKey(type, fileName) {
+  return `${String(type || "").trim()}::${String(fileName || "").trim()}`;
+}
+
+function parseFileKey(key) {
+  const text = String(key || "");
+  const separator = text.indexOf("::");
+  if (separator <= 0) {
+    return { type: "", fileName: "" };
+  }
+  return {
+    type: text.slice(0, separator),
+    fileName: text.slice(separator + 2),
+  };
+}
+
 async function fetchJson(url) {
-  const response = await fetch(url);
+  const response = await fetch(url, {
+    credentials: "same-origin",
+  });
+  handleUnauthorizedResponse(response);
   const text = await response.text();
   let payload = {};
   try {
@@ -80,11 +169,13 @@ async function fetchJson(url) {
 async function postJson(url, body) {
   const response = await fetch(url, {
     method: "POST",
-    headers: {
+    credentials: "same-origin",
+    headers: withAuthHeaders({
       "Content-Type": "application/json",
-    },
+    }),
     body: JSON.stringify(body || {}),
   });
+  handleUnauthorizedResponse(response);
   const text = await response.text();
   let payload = {};
   try {
@@ -119,16 +210,43 @@ function setStatus(message, type = "neutral") {
   }
 }
 
+function getErrorMessage(error, fallbackMessage = "Beklenmeyen bir hata oluştu.") {
+  const message = error?.message;
+  if (typeof message === "string" && message.trim()) {
+    return message.trim();
+  }
+  return fallbackMessage;
+}
+
+function runSafeAsync(task, onError) {
+  try {
+    const result = task();
+    Promise.resolve(result).catch(onError);
+  } catch (error) {
+    onError(error);
+  }
+}
+
+function withAsyncStatus(handler, fallbackMessage = "İşlem başarısız.") {
+  return (event) => {
+    runSafeAsync(() => handler(event), (error) => {
+      console.error(error);
+      setStatus(getErrorMessage(error, fallbackMessage), "error");
+    });
+  };
+}
+
 function readFormPayload() {
   const fromDate = String(el.fromDate.value || "").trim();
   const toDate = String(el.toDate.value || "").trim();
-  const startPage = parsePositiveInt(el.startPage.value, 1);
-  const endPage = parsePositiveInt(el.endPage.value, startPage);
+  const allPages = Boolean(el.allPages.checked);
+  const startPage = allPages ? 1 : parsePositiveInt(el.startPage.value, 1);
+  const endPage = allPages ? null : parsePositiveInt(el.endPage.value, startPage);
 
   if (!fromDate || !toDate) {
     throw new Error("Başlangıç ve bitiş tarihi zorunlu.");
   }
-  if (endPage < startPage) {
+  if (!allPages && endPage < startPage) {
     throw new Error("Bitiş sayfası başlangıç sayfasından küçük olamaz.");
   }
 
@@ -138,6 +256,7 @@ function readFormPayload() {
     toDate,
     startPage,
     endPage,
+    allPages,
     browserMode: el.browserMode.value === "visible" ? "visible" : "headless",
   };
 }
@@ -150,7 +269,7 @@ function renderStatus() {
     const run = state.currentRun;
     setStatus("Çalışıyor", "running");
     if (run) {
-      el.runMeta.textContent = `${run.type} | ${run.fromDate} -> ${run.toDate} | ${run.startPage}-${run.endPage}`;
+      el.runMeta.textContent = `${run.type} | ${run.fromDate} -> ${run.toDate} | ${formatPageRange(run)}`;
     } else {
       el.runMeta.textContent = "Çalışıyor";
     }
@@ -166,7 +285,7 @@ function renderStatus() {
     } else {
       setStatus("Hata", "error");
     }
-    el.runMeta.textContent = `${r.type} | ${r.fromDate} -> ${r.toDate} | ${r.startPage}-${r.endPage}`;
+    el.runMeta.textContent = `${r.type} | ${r.fromDate} -> ${r.toDate} | ${formatPageRange(r)}`;
     return;
   }
 
@@ -201,7 +320,9 @@ function renderHistory() {
   el.historyBody.innerHTML = rows
     .map((row) => {
       const dateRange = `${row?.dateRange?.from || "-"} -> ${row?.dateRange?.to || "-"}`;
-      const selectedPages = `${row?.selectedPages?.startPage ?? "-"} -> ${row?.selectedPages?.endPage ?? "-"}`;
+      const selectedPages = row?.selectedPages?.allPages
+        ? "Tümü"
+        : `${row?.selectedPages?.startPage ?? "-"} -> ${row?.selectedPages?.endPage ?? "-"}`;
       const processedPages = Array.isArray(row?.pagesProcessed) && row.pagesProcessed.length
         ? row.pagesProcessed.join(", ")
         : "-";
@@ -223,25 +344,40 @@ function renderFiles() {
   const rows = state.files;
   el.filesMeta.textContent = `${rows.length} dosya`;
 
-  if (!rows.length) {
-    el.filesBody.innerHTML = '<tr><td colspan="5">Dosya bulunamadı.</td></tr>';
-    return;
+  const visibleKeys = new Set(rows.map((row) => buildFileKey(row.type, row.fileName)));
+  for (const key of [...state.selectedFileKeys]) {
+    if (!visibleKeys.has(key)) {
+      state.selectedFileKeys.delete(key);
+    }
   }
 
-  el.filesBody.innerHTML = rows
-    .map((row) => {
-      const downloadUrl = `/api/ekapv3/files/download?type=${encodeURIComponent(
-        row.type || "",
-      )}&fileName=${encodeURIComponent(row.fileName || "")}`;
-      return `<tr>
+  if (!rows.length) {
+    el.filesBody.innerHTML = '<tr><td colspan="6">Dosya bulunamadı.</td></tr>';
+  } else {
+    el.filesBody.innerHTML = rows
+      .map((row) => {
+        const fileKey = buildFileKey(row.type, row.fileName);
+        const checked = state.selectedFileKeys.has(fileKey) ? "checked" : "";
+        const downloadUrl = `/api/ekapv3/files/download?type=${encodeURIComponent(
+          row.type || "",
+        )}&fileName=${encodeURIComponent(row.fileName || "")}`;
+        return `<tr>
+  <td><input type="checkbox" data-file-key="${escapeHtml(fileKey)}" ${checked} /></td>
   <td>${escapeHtml(formatDate(row.updatedAt))}</td>
   <td>${escapeHtml(row.type || "-")}</td>
   <td>${escapeHtml(row.fileName || "-")}</td>
   <td>${escapeHtml(formatBytes(row.sizeBytes))}</td>
   <td><a class="btn btn--ghost btn--link v3-mini-btn" href="${downloadUrl}">İndir</a></td>
 </tr>`;
-    })
-    .join("");
+      })
+      .join("");
+  }
+
+  const allChecked = rows.length > 0 && rows.every((row) => state.selectedFileKeys.has(buildFileKey(row.type, row.fileName)));
+  el.selectAllFilesCheckbox.checked = allChecked;
+  el.deleteSelectedButton.disabled = state.selectedFileKeys.size === 0;
+  el.deleteByTypeButton.disabled = !String(el.filesTypeFilter.value || "").trim() || rows.length === 0;
+  el.deleteAllButton.disabled = rows.length === 0;
 }
 
 async function refreshStatus() {
@@ -275,51 +411,324 @@ async function refreshFiles() {
   renderFiles();
 }
 
-el.form.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  try {
+function openConfirmationDialog({ title, message, action }) {
+  state.lastFocusedElement =
+    document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  state.confirmBusy = false;
+  state.pendingDeleteAction = action;
+  el.confirmTitle.textContent = title;
+  el.confirmMessage.textContent = message;
+  el.confirmInput.value = "";
+  el.confirmError.hidden = true;
+  el.cancelConfirmButton.disabled = false;
+  el.approveConfirmButton.disabled = false;
+  el.confirmOverlay.hidden = false;
+  el.confirmInput.focus();
+}
+
+function closeConfirmationDialog() {
+  if (state.confirmBusy) {
+    return;
+  }
+  state.pendingDeleteAction = null;
+  state.confirmBusy = false;
+  el.confirmOverlay.hidden = true;
+  el.confirmInput.value = "";
+  el.confirmError.hidden = true;
+  el.cancelConfirmButton.disabled = false;
+  el.approveConfirmButton.disabled = false;
+
+  const restoreTarget = state.lastFocusedElement;
+  state.lastFocusedElement = null;
+  if (restoreTarget && typeof restoreTarget.focus === "function") {
+    restoreTarget.focus();
+  }
+}
+
+function getDialogFocusableElements() {
+  return Array.from(
+    el.confirmOverlay.querySelectorAll(
+      'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
+    ),
+  );
+}
+
+function handleConfirmOverlayKeydown(event) {
+  if (el.confirmOverlay.hidden) {
+    return;
+  }
+
+  if (event.key === "Escape") {
+    if (!state.confirmBusy) {
+      event.preventDefault();
+      closeConfirmationDialog();
+    }
+    return;
+  }
+
+  if (event.key !== "Tab") {
+    return;
+  }
+
+  const focusable = getDialogFocusableElements();
+  if (!focusable.length) {
+    return;
+  }
+
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  const active = document.activeElement;
+
+  if (event.shiftKey && active === first) {
+    event.preventDefault();
+    last.focus();
+    return;
+  }
+
+  if (!event.shiftKey && active === last) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
+function getSelectedFilesPayload() {
+  const rows = [];
+  for (const key of state.selectedFileKeys) {
+    const parsed = parseFileKey(key);
+    if (!parsed.type || !parsed.fileName) continue;
+    rows.push(parsed);
+  }
+  return rows;
+}
+
+async function runDeleteSelectedFiles() {
+  const files = getSelectedFilesPayload();
+  if (!files.length) {
+    setStatus("Önce dosya seçin.", "error");
+    return;
+  }
+
+  openConfirmationDialog({
+    title: "Seçili Dosyaları Sil",
+    message: `${files.length} dosya silinecek. Bu işlem geri alınamaz.`,
+    action: async (confirmation) => {
+      const payload = await postJson("/api/ekapv3/files/delete", {
+        mode: "selected",
+        files,
+        confirmation,
+      });
+      const deletedCount = payload?.data?.deletedCount || 0;
+      state.selectedFileKeys.clear();
+      await refreshFiles();
+      setStatus(`${deletedCount} dosya silindi.`, "success");
+    },
+  });
+}
+
+async function runDeleteByType() {
+  const type = String(el.filesTypeFilter.value || "").trim();
+  if (!type) {
+    setStatus("Türü toplu silmek için önce tür filtresi seçin.", "error");
+    return;
+  }
+
+  openConfirmationDialog({
+    title: "Tür Bazlı Toplu Silme",
+    message: `${type} klasöründeki listelenen dosyalar silinecek. Bu işlem geri alınamaz.`,
+    action: async (confirmation) => {
+      const payload = await postJson("/api/ekapv3/files/delete", {
+        mode: "byType",
+        type,
+        confirmation,
+      });
+      const deletedCount = payload?.data?.deletedCount || 0;
+      state.selectedFileKeys.clear();
+      await refreshFiles();
+      setStatus(`${deletedCount} dosya silindi.`, "success");
+    },
+  });
+}
+
+async function runDeleteAllFiles() {
+  openConfirmationDialog({
+    title: "Tüm Dosyaları Sil",
+    message: "Mahkeme ve uyuşmazlık klasörlerindeki tüm dosyalar silinecek. Bu işlem geri alınamaz.",
+    action: async (confirmation) => {
+      const payload = await postJson("/api/ekapv3/files/delete", {
+        mode: "all",
+        confirmation,
+      });
+      const deletedCount = payload?.data?.deletedCount || 0;
+      state.selectedFileKeys.clear();
+      await refreshFiles();
+      setStatus(`${deletedCount} dosya silindi.`, "success");
+    },
+  });
+}
+
+async function openDownloadsFolder() {
+  const type = String(el.filesTypeFilter.value || "").trim();
+  await postJson("/api/ekapv3/files/open-dir", {
+    type: type || null,
+  });
+}
+
+el.form.addEventListener(
+  "submit",
+  withAsyncStatus(async (event) => {
+    event.preventDefault();
     const payload = readFormPayload();
     await postJson("/api/ekapv3/start", payload);
     await refreshStatus();
     await refreshHistory();
-  } catch (error) {
-    setStatus(error?.message || "Başlatma başarısız.", "error");
-  }
+  }, "Başlatma başarısız."),
+);
+
+el.allPages.addEventListener("change", () => {
+  applyAllPagesUi();
 });
 
-el.stopButton.addEventListener("click", async () => {
-  try {
+el.stopButton.addEventListener(
+  "click",
+  withAsyncStatus(async () => {
     await postJson("/api/ekapv3/stop", {});
     await refreshStatus();
-  } catch (error) {
-    setStatus(error?.message || "Durdurma başarısız.", "error");
-  }
-});
+  }, "Durdurma başarısız."),
+);
 
-el.filesTypeFilter.addEventListener("change", async () => {
-  try {
+el.filesTypeFilter.addEventListener(
+  "change",
+  withAsyncStatus(async () => {
     await refreshFiles();
-  } catch (error) {
-    setStatus(error?.message || "Dosya listesi alınamadı.", "error");
-  }
-});
+  }, "Dosya listesi alınamadı."),
+);
 
-el.filesRefreshButton.addEventListener("click", async () => {
-  try {
+el.filesRefreshButton.addEventListener(
+  "click",
+  withAsyncStatus(async () => {
     await refreshFiles();
     setStatus("Dosya listesi yenilendi.");
-  } catch (error) {
-    setStatus(error?.message || "Dosya listesi alınamadı.", "error");
+  }, "Dosya listesi alınamadı."),
+);
+
+el.openDownloadsButton.addEventListener(
+  "click",
+  withAsyncStatus(async () => {
+    await openDownloadsFolder();
+    const type = String(el.filesTypeFilter.value || "").trim();
+    if (type) {
+      setStatus(`${type} klasörü açıldı.`, "success");
+    } else {
+      setStatus("Klasör açıldı.", "success");
+    }
+  }, "Klasör açılamadı."),
+);
+
+el.selectAllFilesCheckbox.addEventListener("change", () => {
+  if (el.selectAllFilesCheckbox.checked) {
+    state.files.forEach((row) => state.selectedFileKeys.add(buildFileKey(row.type, row.fileName)));
+  } else {
+    state.files.forEach((row) => state.selectedFileKeys.delete(buildFileKey(row.type, row.fileName)));
+  }
+  renderFiles();
+});
+
+el.filesBody.addEventListener("change", (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLInputElement)) return;
+  if (target.type !== "checkbox") return;
+
+  const key = String(target.dataset.fileKey || "").trim();
+  if (!key) return;
+
+  if (target.checked) {
+    state.selectedFileKeys.add(key);
+  } else {
+    state.selectedFileKeys.delete(key);
+  }
+  renderFiles();
+});
+
+el.deleteSelectedButton.addEventListener(
+  "click",
+  withAsyncStatus(async () => {
+    await runDeleteSelectedFiles();
+  }, "Seçili dosyalar için silme başlatılamadı."),
+);
+
+el.deleteByTypeButton.addEventListener(
+  "click",
+  withAsyncStatus(async () => {
+    await runDeleteByType();
+  }, "Tür bazlı toplu silme başlatılamadı."),
+);
+
+el.deleteAllButton.addEventListener(
+  "click",
+  withAsyncStatus(async () => {
+    await runDeleteAllFiles();
+  }, "Tüm dosyalar için toplu silme başlatılamadı."),
+);
+
+el.cancelConfirmButton.addEventListener("click", () => {
+  closeConfirmationDialog();
+});
+
+el.confirmOverlay.addEventListener("click", (event) => {
+  if (event.target === el.confirmOverlay) {
+    closeConfirmationDialog();
   }
 });
 
+el.confirmOverlay.addEventListener("keydown", handleConfirmOverlayKeydown);
+
+el.approveConfirmButton.addEventListener(
+  "click",
+  withAsyncStatus(async () => {
+    if (state.confirmBusy) {
+      return;
+    }
+
+    if (typeof state.pendingDeleteAction !== "function") {
+      closeConfirmationDialog();
+      return;
+    }
+
+    const confirmation = normalizeConfirmation(el.confirmInput.value);
+    if (confirmation !== DELETE_CONFIRMATION_TEXT) {
+      el.confirmError.hidden = false;
+      return;
+    }
+
+    state.confirmBusy = true;
+    el.approveConfirmButton.disabled = true;
+    el.cancelConfirmButton.disabled = true;
+    setStatus("Silme işlemi sürüyor...");
+    try {
+      await state.pendingDeleteAction(confirmation);
+      state.confirmBusy = false;
+      closeConfirmationDialog();
+    } catch (error) {
+      state.confirmBusy = false;
+      el.approveConfirmButton.disabled = false;
+      el.cancelConfirmButton.disabled = false;
+      throw error;
+    }
+  }, "Dosya silme hatası."),
+);
+
 (async () => {
+  if (window.EkapAuth?.ready) {
+    await window.EkapAuth.ready;
+  }
+
   const now = new Date();
   const yyyy = now.getFullYear();
   const mm = String(now.getMonth() + 1).padStart(2, "0");
   const dd = String(now.getDate()).padStart(2, "0");
   el.fromDate.value = `${yyyy}-${mm}-01`;
   el.toDate.value = `${yyyy}-${mm}-${dd}`;
+  applyAllPagesUi();
 
   try {
     await refreshStatus();
@@ -329,20 +738,46 @@ el.filesRefreshButton.addEventListener("click", async () => {
     setStatus(error?.message || "Durum alınamadı.", "error");
   }
 
-  setInterval(async () => {
-    try {
-      await refreshStatus();
-      await refreshHistory();
-    } catch (_) {
-      // Silent poll failure.
+  setInterval(() => {
+    if (statusPollInFlight) {
+      return;
     }
+    statusPollInFlight = true;
+
+    void (async () => {
+      try {
+        await refreshStatus();
+        await refreshHistory();
+        statusPollFailureCount = 0;
+      } catch (_) {
+        statusPollFailureCount += 1;
+        if (statusPollFailureCount >= 2) {
+          setStatus("Canlı durum güncellenemiyor.", "error");
+        }
+      } finally {
+        statusPollInFlight = false;
+      }
+    })();
   }, 2500);
 
-  setInterval(async () => {
-    try {
-      await refreshFiles();
-    } catch (_) {
-      // Silent poll failure.
+  setInterval(() => {
+    if (filesPollInFlight) {
+      return;
     }
+    filesPollInFlight = true;
+
+    void (async () => {
+      try {
+        await refreshFiles();
+        filesPollFailureCount = 0;
+      } catch (_) {
+        filesPollFailureCount += 1;
+        if (filesPollFailureCount >= 2) {
+          setStatus("Dosya listesi güncellenemiyor.", "error");
+        }
+      } finally {
+        filesPollInFlight = false;
+      }
+    })();
   }, 10000);
 })();

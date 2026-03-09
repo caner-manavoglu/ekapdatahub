@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>EKAP İndirilenler</title>
+    <title>EKAP Kayıt Yönetimi</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -17,11 +17,23 @@
     <header class="topbar">
       <div class="topbar__brand">
         <p class="eyebrow">EKAP DATA HUB</p>
-        <h1>İndirilenler Yönetimi</h1>
+        <h1>Kayıt Yönetimi</h1>
       </div>
       <form id="downloadsFilterForm" class="topbar__actions" autocomplete="off">
-        <a href="/" class="btn btn--ghost btn--link">Ana Sayfa</a>
-        <a href="/ekapv3.html" class="btn btn--ghost btn--link">EKAP v3</a>
+        <a href="/" class="btn btn--ghost btn--link">Proje Seçimi</a>
+        <a href="/dokumantasyon" class="btn btn--ghost btn--link">Dokümantasyona Dön</a>
+        <span class="btn btn--ghost btn--link is-active" aria-current="page">Kayıt Yönetimi</span>
+        <button type="button" class="btn btn--ghost" data-auth-logout hidden>Çıkış</button>
+        <div class="topbar__field">
+          <label for="downloadsSearchInput">Metin Ara</label>
+          <input
+            id="downloadsSearchInput"
+            name="q"
+            type="search"
+            placeholder="İKN, ihale adı veya idare"
+            aria-label="İKN, ihale adı veya idare ara"
+          />
+        </div>
         <div class="topbar__field">
           <label for="dateFilterSelect">Çekim Tarihi</label>
           <select id="dateFilterSelect" aria-label="Çekim Tarihi">
@@ -31,15 +43,14 @@
         <button type="submit" class="btn btn--primary">Listele</button>
         <button type="button" id="clearFilterButton" class="btn btn--ghost">Filtreyi Temizle</button>
         <button type="button" id="deleteSelectedButton" class="btn btn--danger">Seçilenleri Sil</button>
-        <button type="button" id="deleteByDateButton" class="btn btn--danger">Tarihi Toplu Sil</button>
-        <span id="downloadStatus" class="meta-pill">Hazır</span>
+        <span id="downloadStatus" class="meta-pill" aria-live="polite" aria-atomic="true">Hazır</span>
       </form>
     </header>
 
     <main class="layout layout--single">
       <section class="panel panel--detail downloads-panel">
         <div class="panel__head">
-          <h2>İndirilen Kayıtlar</h2>
+          <h2>Kayıtlar</h2>
           <span id="downloadsMeta" class="meta-pill">-</span>
         </div>
 
@@ -88,6 +99,7 @@
       </div>
     </div>
 
+    <script src="/auth.js" defer></script>
     <script src="/downloads.js" defer></script>
   </body>
 </html>

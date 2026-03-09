@@ -77,8 +77,10 @@ const maxPagesRaw = Number(getArg('maxPages', process.env.MAX_PAGES || '500'));
 const maxPages = Number.isFinite(maxPagesRaw) && maxPagesRaw > 0 ? Math.floor(maxPagesRaw) : 500;
 const startPageRaw = Number(getArg('startPage', process.env.START_PAGE || '1'));
 const startPage = Number.isFinite(startPageRaw) && startPageRaw >= 1 ? Math.floor(startPageRaw) : 1;
+const allPagesArg = (getArg('allPages', process.env.ALL_PAGES || '') || '').toLowerCase();
+const allPages = allPagesArg === '1' || allPagesArg === 'true' || allPagesArg === 'yes' || allPagesArg === 'on';
 const endPageArg = getArg('endPage', process.env.END_PAGE || '');
-const hasEndPage = endPageArg !== '';
+const hasEndPage = !allPages && endPageArg !== '';
 const endPageRaw = hasEndPage ? Number(endPageArg) : null;
 if (hasEndPage && (!Number.isFinite(endPageRaw) || endPageRaw < startPage)) {
   throw new Error(`Invalid endPage: ${endPageArg}. endPage must be >= startPage (${startPage}).`);
@@ -99,7 +101,7 @@ if (browserMode && browserMode !== 'headless' && browserMode !== 'visible') {
 }
 const isHeadless = browserMode ? browserMode === 'headless' : legacyHeadlessArg === 'true';
 
-const downloadsDir = path.join(process.cwd(), 'downloads-uyusmazlik');
+const downloadsDir = path.join(process.cwd(), 'indirilenler', 'uyusmazlik');
 if (!fs.existsSync(downloadsDir)) {
   fs.mkdirSync(downloadsDir, { recursive: true });
 }
@@ -443,7 +445,7 @@ const run = async () => {
   try {
     console.log(`Going to ${BASE_URL}`);
     console.log(`Date range: ${fromDate} -> ${toDate}`);
-    console.log(`Page range: ${startPage} -> ${endPage}`);
+    console.log(`Page range: ${allPages ? `${startPage} -> TUMU` : `${startPage} -> ${endPage}`}`);
     console.log(`Browser mode: ${isHeadless ? 'headless' : 'visible'}`);
     console.log(`Timeout retries per row: ${timeoutRetries}`);
 
@@ -468,14 +470,14 @@ const run = async () => {
       await waitGridReady(driver);
     }
 
-    for (; currentPage <= endPage; currentPage += 1) {
+    for (; allPages || currentPage <= endPage; currentPage += 1) {
       console.log(`Processing page ${currentPage}`);
       const pageStats = await processCurrentPageRows(driver, currentPage);
       totalDownloaded += pageStats.downloaded;
       totalFailed += pageStats.failed;
       totalRetries += pageStats.retries;
 
-      if (currentPage >= endPage) {
+      if (!allPages && currentPage >= endPage) {
         console.log('Reached endPage. Finished.');
         break;
       }

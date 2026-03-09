@@ -3,6 +3,7 @@ const baseConfig = require("./config");
 const EkapClient = require("./ekapClient");
 const { cleanVeriHtml } = require("./htmlCleaner");
 const { writeTenderPdf } = require("./pdfWriter");
+const { ensureTenderCollectionIndexes } = require("./dbIndexes");
 const {
   extractRequestedFields,
   buildSelectedSummaryText,
@@ -246,9 +247,7 @@ async function runScraper(options = {}) {
     await mongoClient.connect();
     collection = mongoClient.db(cfg.mongodbDb).collection(cfg.mongodbCollection);
 
-    await collection.createIndex({ sourceIhaleId: 1 }, { unique: true });
-    await collection.createIndex({ ikn: 1 });
-    await collection.createIndex({ updatedAt: -1 });
+    await ensureTenderCollectionIndexes(collection);
   }
 
   let page = 0;

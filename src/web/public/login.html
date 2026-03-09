@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>EKAP Giriş</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body class="login-page">
+    <div class="bg-noise" aria-hidden="true"></div>
+    <main class="login-shell">
+      <section class="login-card">
+        <p class="eyebrow">EKAP DATA HUB</p>
+        <h1>Panele Giriş</h1>
+        <p class="login-copy">Devam etmek için kullanıcı bilgilerinizi girin.</p>
+
+        <form id="loginForm" class="login-form" autocomplete="off">
+          <label class="login-field" for="loginUsername">
+            <span>Kullanıcı Adı</span>
+            <input id="loginUsername" name="username" type="text" required />
+          </label>
+
+          <label class="login-field" for="loginPassword">
+            <span>Şifre</span>
+            <input id="loginPassword" name="password" type="password" required />
+          </label>
+
+          <button id="loginSubmitButton" type="submit" class="btn btn--primary">Giriş Yap</button>
+          <p id="loginStatus" class="login-status" aria-live="polite" aria-atomic="true">
+            Hazır
+          </p>
+        </form>
+      </section>
+    </main>
+
+    <script src="/auth.js" defer></script>
+    <script src="/login.js" defer></script>
+  </body>
+</html>

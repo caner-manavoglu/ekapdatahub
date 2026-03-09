@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>EKAP Dokümantasyon Görüntüleyici</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="bg-noise" aria-hidden="true"></div>
+    <header class="topbar">
+      <div class="topbar__brand">
+        <p class="eyebrow">EKAP DATA HUB</p>
+        <h1>Dokümantasyon Karşılaştırma Paneli</h1>
+      </div>
+      <form id="searchForm" class="topbar__actions topbar__actions--search" autocomplete="off">
+        <a href="/" class="btn btn--ghost btn--link">Proje Seçimi</a>
+        <span class="btn btn--ghost btn--link is-active" aria-current="page">Dokümantasyon</span>
+        <a href="/indirilenler" class="btn btn--ghost btn--link">Kayıt Yönetimi</a>
+        <button type="button" class="btn btn--ghost" data-auth-logout hidden>Çıkış</button>
+        <input
+          id="searchInput"
+          name="q"
+          type="search"
+          placeholder="İKN, ihale adı veya idare adı ara"
+        />
+        <button type="submit" class="btn btn--primary">Ara</button>
+        <button type="button" id="refreshButton" class="btn btn--ghost">Yenile</button>
+      </form>
+    </header>
+
+    <section class="scrape-bar" aria-label="Scrape Kontrolü">
+      <div class="scrape-bar__inner">
+        <div class="topbar__field">
+          <label for="scrapeStartPageInput">Başlangıç Sayfası</label>
+          <input
+            id="scrapeStartPageInput"
+            name="scrapeStartPage"
+            type="number"
+            min="1"
+            step="1"
+            value="1"
+            title="Başlangıç sayfası"
+            aria-label="Başlangıç sayfası"
+          />
+        </div>
+        <div class="topbar__field">
+          <label for="scrapeEndPageInput">Bitiş Sayfası</label>
+          <input
+            id="scrapeEndPageInput"
+            name="scrapeEndPage"
+            type="number"
+            min="1"
+            step="1"
+            value="1"
+            title="Bitiş sayfası"
+            aria-label="Bitiş sayfası"
+          />
+        </div>
+        <label class="topbar__field topbar__field--check" for="scrapeAllPagesCheckbox">
+          <input id="scrapeAllPagesCheckbox" type="checkbox" />
+          <span>Tüm sayfaları çek</span>
+        </label>
+        <button type="button" id="scrapeButton" class="btn btn--accent">Verileri Çek</button>
+        <button type="button" id="stopScrapeButton" class="btn btn--danger" disabled>Durdur</button>
+        <span id="scrapeStatus" class="meta-pill" aria-live="polite" aria-atomic="true"
+          >Scrape: Hazır</span
+        >
+      </div>
+    </section>
+
+    <main class="layout layout--docs">
+      <aside class="panel panel--list">
+        <div class="panel__head">
+          <h2>İhale Listesi</h2>
+          <span id="listMeta" class="meta-pill">-</span>
+        </div>
+        <div id="tenderList" class="tender-list"></div>
+        <div class="pager">
+          <button id="prevPageButton" class="btn btn--ghost" type="button">Önceki</button>
+          <span id="pageMeta" class="pager__meta">Sayfa 1 / 1</span>
+          <button id="nextPageButton" class="btn btn--ghost" type="button">Sonraki</button>
+        </div>
+      </aside>
+
+      <section class="panel panel--detail">
+        <div id="emptyState" class="empty-state">
+          <h3>Kayıt seçin</h3>
+          <p>Listeden bir ihale seçtiğinizde tam dokümantasyon ve seçili alanlar burada görünecek.</p>
+        </div>
+
+        <div id="detailView" class="detail" hidden>
+          <div class="detail__head">
+            <div>
+              <p id="detailIkn" class="eyebrow"></p>
+              <h2 id="detailTitle"></h2>
+              <p id="detailIdare" class="detail__idare"></p>
+            </div>
+          </div>
+
+          <div class="detail__toolbar">
+            <label for="ilanSelect">İlan</label>
+            <select id="ilanSelect"></select>
+            <button id="downloadFullPdfButton" class="btn btn--ghost" type="button">Tam Metin PDF</button>
+            <button id="downloadSelectedPdfButton" class="btn btn--ghost" type="button">
+              Seçili Alanlar PDF
+            </button>
+            <div class="tab-group" role="tablist" aria-label="Gorunum sekmesi">
+              <button
+                id="tabFull"
+                class="tab is-active"
+                data-tab="full"
+                type="button"
+                role="tab"
+                aria-selected="true"
+                aria-controls="panelFull"
+              >
+                Tam Doküman
+              </button>
+              <button
+                id="tabSummary"
+                class="tab"
+                data-tab="summary"
+                type="button"
+                role="tab"
+                aria-selected="false"
+                aria-controls="panelSummary"
+              >
+                Seçili Alanlar
+              </button>
+            </div>
+          </div>
+
+          <p id="detailNotice" class="inline-status" aria-live="polite" aria-atomic="true" hidden></p>
+
+          <div class="viewer-grid">
+            <section
+              id="panelFull"
+              class="viewer-card"
+              data-view="full"
+              role="tabpanel"
+              aria-labelledby="tabFull"
+            >
+              <h3>Tam Dokümantasyon (HTML)</h3>
+              <iframe id="fullDocFrame" class="doc-frame" sandbox=""></iframe>
+            </section>
+
+            <section
+              id="panelSummary"
+              class="viewer-card"
+              data-view="summary"
+              role="tabpanel"
+              aria-labelledby="tabSummary"
+              hidden
+            >
+              <h3>Seçili Alanlar Özeti</h3>
+              <pre id="summaryText" class="text-block"></pre>
+            </section>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <template id="tenderCardTemplate">
+      <article class="tender-card" tabindex="0" role="button">
+        <p class="tender-card__ikn"></p>
+        <h3 class="tender-card__title"></h3>
+        <p class="tender-card__idare"></p>
+        <p class="tender-card__preview"></p>
+        <p class="tender-card__meta"></p>
+      </article>
+    </template>
+
+    <script src="/auth.js" defer></script>
+    <script src="/app.js" defer></script>
+  </body>
+</html>
