@@ -1,0 +1,12 @@
+services:
+  mongo-dev:
+    image: mongo:7
+    container_name: ekap-mongo-dev
+    restart: unless-stopped
+    ports:
+      - "27018:27017"
+    volumes:
+      - ekap_mongo_dev_data:/data/db
+
+volumes:
+  ekap_mongo_dev_data:

@@ -33,6 +33,30 @@ MongoDB'yi Docker ile ayağa kaldırmak için:
 docker run -d --name ekap-mongo -p 27017:27017 mongo:7
 ```
 
+## Geliştirme Ortamı (Dev)
+
+İzole bir geliştirme ortamı için `.env.dev` + ayrı Mongo portu (`27018`) kullanabilirsiniz:
+
+```bash
+npm run dev:prepare
+npm run dev:db:up
+npm run dev:web
+```
+
+Dev arayüz: `http://127.0.0.1:8788`
+
+Scraper'ı dev ayarlarıyla çalıştırmak için:
+
+```bash
+npm run dev:scraper
+```
+
+Dev Mongo'yu kapatmak için:
+
+```bash
+npm run dev:db:down
+```
+
 ## Çalıştırma
 
 ```bash
@@ -96,6 +120,7 @@ Not: Bu migration komutu geçiş dönemi içindir ve 30 Eylül 2026 sonrası kal
 - `MONGODB_URI`: Mongo bağlantısı
 - `MONGODB_DB`: Veritabanı adı
 - `MONGODB_COLLECTION`: Koleksiyon adı
+- `ENV_FILE`: Yüklenecek `.env` dosya yolu (örn: `.env.dev`)
 - `GENERATE_PDF`: `true` ise her satır için PDF oluşturur (`DRY_RUN=true` iken belirtilmezse varsayılan `false`)
 - `PDF_OUTPUT_DIR`: PDF çıktı klasörü
 - `PDF_FONT_PATH`: PDF için kullanılacak Unicode font dosya yolu (öneri: `Arial Unicode.ttf`)
@@ -120,6 +145,7 @@ Not: Bu migration komutu geçiş dönemi içindir ve 30 Eylül 2026 sonrası kal
 - `AUTH_LOGIN_MAX_ATTEMPTS`: Pencere başına izin verilen maksimum hatalı deneme
 - `AUTH_USERS`: JSON dizi (username/password/role). Password: `plain:<sifre>` veya `sha256:<hex>`
 - `AUDIT_LOG_COLLECTION`: Silme gibi yıkıcı işlemler için audit kayıt koleksiyonu
+- `WEB_SKIP_OPEN_DIR`: `true` ise "indirilenlere git" sırasında OS dosya yöneticisi otomatik açılmaz
 
 ## Rol Yetkileri (auth aktifken)
 
