@@ -29,6 +29,7 @@ const el = {
   startPage: document.getElementById("startPage"),
   endPage: document.getElementById("endPage"),
   allPages: document.getElementById("allPages"),
+  resumeFromLast: document.getElementById("resumeFromLast"),
   browserMode: document.getElementById("browserMode"),
   startButton: document.getElementById("startButton"),
   stopButton: document.getElementById("stopButton"),
@@ -240,6 +241,7 @@ function readFormPayload() {
   const fromDate = String(el.fromDate.value || "").trim();
   const toDate = String(el.toDate.value || "").trim();
   const allPages = Boolean(el.allPages.checked);
+  const resumeFromLast = Boolean(el.resumeFromLast?.checked);
   const startPage = allPages ? 1 : parsePositiveInt(el.startPage.value, 1);
   const endPage = allPages ? null : parsePositiveInt(el.endPage.value, startPage);
 
@@ -257,6 +259,7 @@ function readFormPayload() {
     startPage,
     endPage,
     allPages,
+    resumeFromLast,
     browserMode: el.browserMode.value === "visible" ? "visible" : "headless",
   };
 }
@@ -269,7 +272,11 @@ function renderStatus() {
     const run = state.currentRun;
     setStatus("Çalışıyor", "running");
     if (run) {
-      el.runMeta.textContent = `${run.type} | ${run.fromDate} -> ${run.toDate} | ${formatPageRange(run)}`;
+      const resumeInfo =
+        run.resumeApplied && Number(run.resumeFromPage || 0) > 0
+          ? ` | Devam: s.${run.resumeFromPage}`
+          : "";
+      el.runMeta.textContent = `${run.type} | ${run.fromDate} -> ${run.toDate} | ${formatPageRange(run)}${resumeInfo}`;
     } else {
       el.runMeta.textContent = "Çalışıyor";
     }
@@ -285,7 +292,11 @@ function renderStatus() {
     } else {
       setStatus("Hata", "error");
     }
-    el.runMeta.textContent = `${r.type} | ${r.fromDate} -> ${r.toDate} | ${formatPageRange(r)}`;
+    const resumeInfo =
+      r.resumeApplied && Number(r.resumeFromPage || 0) > 0
+        ? ` | Devam: s.${r.resumeFromPage}`
+        : "";
+    el.runMeta.textContent = `${r.type} | ${r.fromDate} -> ${r.toDate} | ${formatPageRange(r)}${resumeInfo}`;
     return;
   }
 
@@ -326,7 +337,12 @@ function renderHistory() {
       const processedPages = Array.isArray(row?.pagesProcessed) && row.pagesProcessed.length
         ? row.pagesProcessed.join(", ")
         : "-";
-      const result = `ok:${row?.downloadedCount || 0} / fail:${row?.failedCount || 0}`;
+      const resumeSummary = row?.resume?.applied
+        ? `resume:s.${row?.resume?.resumedFromPage ?? "-"}`
+        : row?.resume?.requested
+          ? "resume:istek"
+          : "resume:-";
+      const result = `ok:${row?.downloadedCount || 0} / fail:${row?.failedCount || 0} / ${resumeSummary}`;
       return `<tr>
   <td>${escapeHtml(formatDate(row?.startedAt))}</td>
   <td>${escapeHtml(row?.type || "-")}</td>

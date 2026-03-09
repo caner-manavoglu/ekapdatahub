@@ -66,6 +66,7 @@ test("parseScrapeOptions should support allPages mode", () => {
     startPage: 5,
     endPage: 11,
     pageSize: 20,
+    detailConcurrency: 7,
   });
 
   assert.equal(parsedAllPages.startSkip, 0);
@@ -73,6 +74,7 @@ test("parseScrapeOptions should support allPages mode", () => {
   assert.equal(parsedAllPages.pageRange?.allPages, true);
   assert.equal(parsedAllPages.pageRange?.startPage, 1);
   assert.equal(parsedAllPages.pageRange?.endPage, null);
+  assert.equal(parsedAllPages.detailConcurrency, 7);
 
   const parsedRange = _internal.parseScrapeOptions({
     allPages: false,
@@ -96,12 +98,14 @@ test("parseEkapV3Options should support allPages mode", () => {
     startPage: 5,
     endPage: 10,
     allPages: true,
+    resumeFromLast: true,
     browserMode: "visible",
   });
 
   assert.equal(parsedAllPages.allPages, true);
   assert.equal(parsedAllPages.startPage, 1);
   assert.equal(parsedAllPages.endPage, null);
+  assert.equal(parsedAllPages.resumeFromLast, true);
   assert.equal(parsedAllPages.browserMode, "visible");
 
   const parsedRange = _internal.parseEkapV3Options({
@@ -117,6 +121,53 @@ test("parseEkapV3Options should support allPages mode", () => {
   assert.equal(parsedRange.allPages, false);
   assert.equal(parsedRange.startPage, 3);
   assert.equal(parsedRange.endPage, 8);
+  assert.equal(parsedRange.resumeFromLast, false);
+});
+
+test("applyEkapV3ResumeOptions should advance start page from last processed page", () => {
+  const base = _internal.parseEkapV3Options({
+    type: "mahkeme",
+    fromDate: "2026-03-01",
+    toDate: "2026-03-09",
+    startPage: 1,
+    endPage: 10,
+    allPages: false,
+    resumeFromLast: true,
+    browserMode: "headless",
+  });
+
+  const resume = _internal.applyEkapV3ResumeOptions(base, {
+    _id: "run-42",
+    pagesProcessed: [1, 2, 5, 4],
+  });
+
+  assert.equal(resume.options.startPage, 6);
+  assert.equal(resume.options.endPage, 10);
+  assert.equal(resume.resumeMeta?.baseRunId, "run-42");
+  assert.equal(resume.resumeMeta?.lastProcessedPage, 5);
+  assert.equal(resume.resumeMeta?.resumedFromPage, 6);
+});
+
+test("applyEkapV3ResumeOptions should reject when selected range is already completed", () => {
+  const base = _internal.parseEkapV3Options({
+    type: "uyusmazlik",
+    fromDate: "2026-03-01",
+    toDate: "2026-03-09",
+    startPage: 3,
+    endPage: 5,
+    allPages: false,
+    resumeFromLast: true,
+    browserMode: "headless",
+  });
+
+  assert.throws(
+    () =>
+      _internal.applyEkapV3ResumeOptions(base, {
+        _id: "run-43",
+        pagesProcessed: [3, 4, 5],
+      }),
+    /tamamlan/i,
+  );
 });
 
 test("requireApiAuth should enforce role and csrf checks", () => {

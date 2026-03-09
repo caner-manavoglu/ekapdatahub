@@ -32,6 +32,10 @@ function resolveOptions(options = {}) {
     retryCount: Math.max(0, toInt(options.retryCount, baseConfig.retryCount)),
     retryDelayMs: Math.max(0, toInt(options.retryDelayMs, baseConfig.retryDelayMs)),
     rateLimitMs: Math.max(0, toInt(options.rateLimitMs, baseConfig.rateLimitMs)),
+    detailConcurrency: Math.max(
+      1,
+      Math.min(16, toInt(options.detailConcurrency, baseConfig.detailConcurrency)),
+    ),
     mongodbUri: options.mongodbUri || baseConfig.mongodbUri,
     mongodbDb: options.mongodbDb || baseConfig.mongodbDb,
     mongodbCollection: options.mongodbCollection || baseConfig.mongodbCollection,
@@ -86,6 +90,44 @@ function errorToMessage(error) {
   return error?.message || String(error);
 }
 
+function isRetryableHttpError(error) {
+  const statusCode = Number(error?.response?.status || 0);
+  if (statusCode === 429 || statusCode >= 500) {
+    return true;
+  }
+
+  const code = String(error?.code || "").trim().toUpperCase();
+  if (
+    code &&
+    [
+      "ECONNABORTED",
+      "ECONNRESET",
+      "ETIMEDOUT",
+      "ENOTFOUND",
+      "EAI_AGAIN",
+      "ECONNREFUSED",
+      "ERR_NETWORK",
+    ].includes(code)
+  ) {
+    return true;
+  }
+
+  const message = String(error?.message || "").toLowerCase();
+  return message.includes("timeout") || message.includes("network error");
+}
+
+function computeBackoffDelayMs(baseDelayMs, attemptIndex) {
+  const base = Math.max(0, toInt(baseDelayMs, 0));
+  if (base === 0) {
+    return 0;
+  }
+
+  const attempt = Math.max(0, toInt(attemptIndex, 0));
+  const exponential = base * 2 ** Math.min(6, attempt);
+  const jitter = Math.floor(Math.random() * Math.max(1, Math.floor(exponential * 0.3)));
+  return exponential + jitter;
+}
+
 async function withRetry(fn, { retries, delayMs, label, logger }) {
   let lastError;
 
@@ -94,12 +136,17 @@ async function withRetry(fn, { retries, delayMs, label, logger }) {
       return await fn();
     } catch (error) {
       lastError = error;
+      const retryable = isRetryableHttpError(error);
+      if (!retryable) {
+        throw error;
+      }
+
       const hasNextAttempt = attempt < retries;
       if (!hasNextAttempt) {
         break;
       }
 
-      const waitMs = delayMs * (attempt + 1);
+      const waitMs = computeBackoffDelayMs(delayMs, attempt);
       logger.warn(
         `[RETRY] ${label} başarısız (deneme ${attempt + 1}/${retries + 1}), ${waitMs}ms sonra tekrar denenecek.`,
       );
@@ -108,6 +155,55 @@ async function withRetry(fn, { retries, delayMs, label, logger }) {
   }
 
   throw lastError;
+}
+
+function createRateLimiter(rateLimitMs) {
+  const delay = Math.max(0, toInt(rateLimitMs, 0));
+  if (delay <= 0) {
+    return async () => {};
+  }
+
+  let queue = Promise.resolve();
+  let lastStartedAt = 0;
+
+  return async () => {
+    let release = () => {};
+    const turn = new Promise((resolve) => {
+      release = resolve;
+    });
+
+    const previous = queue;
+    queue = turn;
+    await previous;
+
+    const now = Date.now();
+    const elapsed = now - lastStartedAt;
+    if (lastStartedAt > 0 && elapsed < delay) {
+      await sleep(delay - elapsed);
+    }
+    lastStartedAt = Date.now();
+    release();
+  };
+}
+
+async function runWithConcurrency(items, concurrency, worker) {
+  const rows = Array.isArray(items) ? items : [];
+  const workerFn = typeof worker === "function" ? worker : async () => {};
+  const limit = Math.max(1, Math.min(Math.max(1, rows.length), toInt(concurrency, 1)));
+  let nextIndex = 0;
+
+  const runners = Array.from({ length: limit }, async () => {
+    while (true) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      if (currentIndex >= rows.length) {
+        return;
+      }
+      await workerFn(rows[currentIndex], currentIndex);
+    }
+  });
+
+  await Promise.all(runners);
 }
 
 function cleanIlanList(ilanList, storeRawHtml) {
@@ -258,6 +354,7 @@ async function runScraper(options = {}) {
   let failed = 0;
   let pdfCreated = 0;
   let stopped = false;
+  const waitForRateLimit = createRateLimiter(cfg.rateLimitMs);
 
   try {
     while (true) {
@@ -295,11 +392,19 @@ async function runScraper(options = {}) {
         `[PAGE ${page + 1}] skip=${skip} rows=${rows.length} totalCount=${totalCount ?? "-"}`,
       );
 
-      for (const row of rows) {
+      let stopLoggedAtPage = false;
+      await runWithConcurrency(rows, cfg.detailConcurrency, async (row) => {
+        if (stopped) {
+          return;
+        }
+
         if (shouldStop()) {
           stopped = true;
-          logger.warn("[STOP] Durdurma isteği alındı. Mevcut sayfa sonunda duruluyor.");
-          break;
+          if (!stopLoggedAtPage) {
+            stopLoggedAtPage = true;
+            logger.warn("[STOP] Durdurma isteği alındı. Mevcut sayfa sonunda duruluyor.");
+          }
+          return;
         }
 
         processed += 1;
@@ -307,18 +412,21 @@ async function runScraper(options = {}) {
         if (!row?.id) {
           failed += 1;
           logger.warn(`[WARN] Satırda id yok, atlandı. ikn=${row?.ikn || "-"}`);
-          continue;
+          return;
         }
 
         try {
-          if (cfg.rateLimitMs > 0) {
-            await sleep(cfg.rateLimitMs);
-          }
+          await waitForRateLimit();
 
-          if (shouldStop()) {
+          if (stopped || shouldStop()) {
             stopped = true;
-            logger.warn("[STOP] Durdurma isteği alındı. Yeni detay isteği gönderilmeden duruluyor.");
-            break;
+            if (!stopLoggedAtPage) {
+              stopLoggedAtPage = true;
+              logger.warn(
+                "[STOP] Durdurma isteği alındı. Yeni detay isteği gönderilmeden duruluyor.",
+              );
+            }
+            return;
           }
 
           const detailResult = await withRetry(
@@ -335,7 +443,7 @@ async function runScraper(options = {}) {
           if (!detailItem) {
             failed += 1;
             logger.warn(`[WARN] Detay boş döndü. ihaleId=${row.id}`);
-            continue;
+            return;
           }
 
           const document = buildDocument(row, detailItem, {
@@ -373,7 +481,7 @@ async function runScraper(options = {}) {
             `[ERROR] Detay işleme hatası ihaleId=${row.id}: ${errorToMessage(error)}`,
           );
         }
-      }
+      });
 
       if (stopped) {
         break;
@@ -392,12 +500,13 @@ async function runScraper(options = {}) {
       dryRun: cfg.dryRun,
       pageSize: cfg.pageSize,
       maxPages: cfg.maxPages,
+      detailConcurrency: cfg.detailConcurrency,
       totalCount,
       pagesProcessed: page,
     };
 
     logger.info(
-      `[DONE] processed=${result.processed} saved=${result.saved} failed=${result.failed} pdfCreated=${result.pdfCreated} stopped=${result.stopped} dryRun=${result.dryRun}`,
+      `[DONE] processed=${result.processed} saved=${result.saved} failed=${result.failed} pdfCreated=${result.pdfCreated} stopped=${result.stopped} dryRun=${result.dryRun} concurrency=${result.detailConcurrency}`,
     );
 
     return result;
@@ -410,4 +519,10 @@ async function runScraper(options = {}) {
 
 module.exports = {
   runScraper,
+  _internal: {
+    isRetryableHttpError,
+    computeBackoffDelayMs,
+    createRateLimiter,
+    runWithConcurrency,
+  },
 };

@@ -107,6 +107,7 @@ Not: Bu migration komutu geçiş dönemi içindir ve 30 Eylül 2026 sonrası kal
 - `RETRY_COUNT`: Hata durumunda deneme sayısı
 - `RETRY_DELAY_MS`: Denemeler arası temel bekleme (artan backoff uygulanır)
 - `RATE_LIMIT_MS`: İstekler arası bekleme
+- `DETAIL_CONCURRENCY`: Detay işlemede eşzamanlı worker sayısı (`1-16`, varsayılan `4`)
 - `STORE_RAW_HTML`: `STORE_FULL_ILAN_CONTENT=true` ise orijinal `veriHtml` saklanır
 - `DRY_RUN`: `true` ise Mongo'ya yazmaz
 - `WEB_PORT`: Frontend/API sunucu portu

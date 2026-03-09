@@ -201,6 +201,7 @@ function parseEkapV3Options(body) {
   const allPages = toBool(payload.allPages, false);
   const startPage = allPages ? 1 : Math.max(1, toInt(payload.startPage, 1));
   const endPage = allPages ? null : Math.max(startPage, toInt(payload.endPage, startPage));
+  const resumeFromLast = toBool(payload.resumeFromLast, false);
   const browserModeRaw = String(payload.browserMode || "headless")
     .trim()
     .toLocaleLowerCase("tr-TR");
@@ -213,7 +214,60 @@ function parseEkapV3Options(body) {
     startPage,
     endPage,
     allPages,
+    resumeFromLast,
     browserMode,
+  };
+}
+
+function getEkapV3LastProcessedPage(runLike) {
+  const pages = Array.isArray(runLike?.pagesProcessed) ? runLike.pagesProcessed : [];
+  let maxPage = 0;
+  for (const value of pages) {
+    const pageNo = toInt(value, 0);
+    if (pageNo > maxPage) {
+      maxPage = pageNo;
+    }
+  }
+  return maxPage;
+}
+
+function applyEkapV3ResumeOptions(options, resumeRun) {
+  const nextOptions = {
+    ...(options || {}),
+  };
+
+  if (!nextOptions.resumeFromLast) {
+    return {
+      options: nextOptions,
+      resumeMeta: null,
+    };
+  }
+
+  if (!resumeRun) {
+    throw new Error(
+      "Kaldığı yerden devam için aynı tür ve tarih aralığında durdurulmuş/başarısız bir çalışma bulunamadı.",
+    );
+  }
+
+  const lastProcessedPage = getEkapV3LastProcessedPage(resumeRun);
+  const nextStartPage = Math.max(1, lastProcessedPage > 0 ? lastProcessedPage + 1 : nextOptions.startPage);
+
+  if (!nextOptions.allPages && nextStartPage > nextOptions.endPage) {
+    throw new Error(
+      "Kaldığı yerden devam için seçilen aralık tamamlanmış görünüyor. Bitiş sayfasını artırın veya yeni aralık seçin.",
+    );
+  }
+
+  nextOptions.startPage = nextStartPage;
+
+  return {
+    options: nextOptions,
+    resumeMeta: {
+      enabled: true,
+      baseRunId: resumeRun?._id || null,
+      lastProcessedPage: lastProcessedPage > 0 ? lastProcessedPage : null,
+      resumedFromPage: nextStartPage,
+    },
   };
 }
 
@@ -447,6 +501,13 @@ function parseScrapeOptions(body) {
 
   if (payload.storeFullIlanContent !== undefined) {
     options.storeFullIlanContent = Boolean(payload.storeFullIlanContent);
+  }
+
+  if (payload.detailConcurrency !== undefined) {
+    options.detailConcurrency = Math.max(
+      1,
+      Math.min(16, toInt(payload.detailConcurrency, config.detailConcurrency)),
+    );
   }
 
   return options;
@@ -1197,7 +1258,31 @@ app.post("/api/ekapv3/start", async (req, res, next) => {
       return;
     }
 
-    const options = parseEkapV3Options(req.body);
+    const requestedOptions = parseEkapV3Options(req.body);
+    let options = {
+      ...requestedOptions,
+    };
+    let resumeMeta = null;
+
+    if (requestedOptions.resumeFromLast) {
+      const resumeRun = ekapV3LogCollection
+        ? await ekapV3LogCollection
+            .find({
+              type: requestedOptions.type,
+              "dateRange.from": requestedOptions.fromDate,
+              "dateRange.to": requestedOptions.toDate,
+              status: { $in: ["stopped", "failed"] },
+            })
+            .sort({ startedAt: -1, createdAt: -1 })
+            .limit(1)
+            .next()
+        : null;
+
+      const resumeResult = applyEkapV3ResumeOptions(requestedOptions, resumeRun);
+      options = resumeResult.options;
+      resumeMeta = resumeResult.resumeMeta;
+    }
+
     await ensureEkapV3DownloadDirs();
     const scriptName =
       options.type === "mahkeme"
@@ -1228,6 +1313,10 @@ app.post("/api/ekapv3/start", async (req, res, next) => {
       startPage: options.startPage,
       endPage: options.endPage,
       allPages: options.allPages,
+      resumeFromLast: Boolean(requestedOptions.resumeFromLast),
+      resumeApplied: Boolean(resumeMeta),
+      resumeBaseRunId: resumeMeta?.baseRunId || null,
+      resumeFromPage: resumeMeta?.resumedFromPage ?? null,
       browserMode: options.browserMode,
       status: "running",
       stopRequested: false,
@@ -1244,6 +1333,14 @@ app.post("/api/ekapv3/start", async (req, res, next) => {
     ekapV3State.currentRun = currentRun;
     ekapV3State.lastError = null;
     ekapV3State.logs = [];
+    if (resumeMeta) {
+      appendEkapV3Log(
+        "info",
+        `[RESUME] oncekiRun=${resumeMeta.baseRunId || "-"} lastProcessedPage=${
+          resumeMeta.lastProcessedPage || "-"
+        } resumedFromPage=${resumeMeta.resumedFromPage}`,
+      );
+    }
     appendEkapV3Log("info", `[RUN] Baslatildi: ${scriptName} ${args.slice(1).join(" ")}`);
 
     if (ekapV3LogCollection) {
@@ -1258,6 +1355,13 @@ app.post("/api/ekapv3/start", async (req, res, next) => {
           startPage: options.startPage,
           endPage: options.endPage,
           allPages: options.allPages,
+        },
+        resume: {
+          requested: Boolean(requestedOptions.resumeFromLast),
+          applied: Boolean(resumeMeta),
+          baseRunId: resumeMeta?.baseRunId || null,
+          lastProcessedPage: resumeMeta?.lastProcessedPage ?? null,
+          resumedFromPage: resumeMeta?.resumedFromPage ?? null,
         },
         browserMode: options.browserMode,
         status: "running",
@@ -1460,6 +1564,7 @@ app.get("/api/ekapv3/history", async (req, res, next) => {
         type: row?.type || null,
         dateRange: row?.dateRange || null,
         selectedPages: row?.selectedPages || null,
+        resume: row?.resume || null,
         status: row?.status || null,
         stopRequested: Boolean(row?.stopRequested),
         downloadedCount: row?.downloadedCount || 0,
@@ -2129,6 +2234,8 @@ module.exports = {
     parseAuthUsers,
     parseScrapeOptions,
     parseEkapV3Options,
+    getEkapV3LastProcessedPage,
+    applyEkapV3ResumeOptions,
     verifyAuthPassword,
     resolveApiRequiredRole,
     hasRequiredRole,

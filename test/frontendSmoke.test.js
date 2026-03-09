@@ -63,6 +63,7 @@ test("ekap v3 page should not include downloads page nav link", () => {
 
   assert.doesNotMatch(ekapv3Html, /href="\/indirilenler"/);
   assert.match(ekapv3Html, /id="allPages"/);
+  assert.match(ekapv3Html, /id="resumeFromLast"/);
 });
 
 test("login page should include required fields and scripts", () => {

@@ -34,6 +34,7 @@ const config = {
   retryCount: Math.max(0, toInt(process.env.RETRY_COUNT, 5)),
   retryDelayMs: Math.max(0, toInt(process.env.RETRY_DELAY_MS, 1_500)),
   rateLimitMs: Math.max(0, toInt(process.env.RATE_LIMIT_MS, 300)),
+  detailConcurrency: Math.max(1, Math.min(16, toInt(process.env.DETAIL_CONCURRENCY, 4))),
   mongodbUri: process.env.MONGODB_URI || "mongodb://127.0.0.1:27017",
   mongodbDb: process.env.MONGODB_DB || "ekap",
   mongodbCollection: process.env.MONGODB_COLLECTION || "ihale_detaylari",
