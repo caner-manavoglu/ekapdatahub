@@ -92,6 +92,56 @@ Bu dosya guncel durum listesidir. Tamamlanan ve bekleyen maddeler birlikte takip
   - Kapsam: gercekci veriyle 10-30 dk test, darbozaz olcumleri ve parametre tuning.
   - Bitis kriteri: kapasite sinirlari ve guvenli default ayarlar dokumante.
 
+## P1.5 - Hiz ve Stabilite (Yeni)
+
+- [ ] `HS-01` API-first kontrol ve listeleme.
+  - Kapsam: sayim/listeleme adimlarini Selenium yerine dogrudan API ile yapmak.
+  - Bitis kriteri: kontrol/sayim ekrani Selenium bagimsiz calisiyor.
+
+- [ ] `HS-02` Job queue + worker havuzu.
+  - Kapsam: indirme pipeline'ini queue tabanli calistirip worker sayisini konfigurable yapmak.
+  - Bitis kriteri: worker coktugunde tum akisin durmamasi ve tekrar baslayabilmesi.
+
+- [ ] `HS-03` Retry politikasini standartlastir.
+  - Kapsam: timeout/5xx/ag kopmasinda ortak exponential backoff + jitter stratejisi.
+  - Bitis kriteri: tum kritik istekler tek tip retry davranisi gosteriyor.
+
+- [ ] `HS-04` Idempotent isleme anahtari.
+  - Kapsam: `type + kararNo + tarih` benzeri deterministic key ile duplicate engelleme.
+  - Bitis kriteri: tekrar calismalarda ayni kayit ikinci kez islenmiyor.
+
+- [ ] `HS-05` Checkpoint/resume guclendirme.
+  - Kapsam: her sayfa/dosya sonrasinda son basarili noktanin kalici saklanmasi.
+  - Bitis kriteri: crash/kill sonrasinda kayip olmadan kaldigi yerden devam.
+
+- [ ] `HS-06` Selenium explicit wait standardi.
+  - Kapsam: `sleep` kullanimlarini kaldirip stabil selector + explicit wait kullanmak.
+  - Bitis kriteri: zamanlama kaynakli timeout/hata sayisinda dusus.
+
+- [ ] `HS-07` Indirme tamamlama dogrulamasi.
+  - Kapsam: `.crdownload/.part` takibi, boyut/sure dogrulamasi, yarim dosya korumasi.
+  - Bitis kriteri: tamamlanmamis dosyalar basarili sayilmiyor.
+
+- [ ] `HS-08` Adaptif concurrency/throttle.
+  - Kapsam: hata oranina gore concurrency otomatik azalt/artir.
+  - Bitis kriteri: hedef servis zorlandiginda otomatik sakinlesme davranisi.
+
+- [ ] `HS-09` Otomatik oturum yenileme.
+  - Kapsam: session/login dususlerinde job'u fail etmeden yeniden authenticate etmek.
+  - Bitis kriteri: session timeout kaynakli toplu fail oraninda dusus.
+
+- [ ] `HS-10` Operasyon metrikleri ve dashboard.
+  - Kapsam: success rate, retry sayisi, ortalama sayfa suresi, hata tipleri metrikleri.
+  - Bitis kriteri: regresyonlar metriklerden hizla tespit edilebiliyor.
+
+- [ ] `HS-11` Worker izolasyonu.
+  - Kapsam: indirme worker'larini ayri process/container olarak izole calistirmak.
+  - Bitis kriteri: tek worker hatasinda ana surecin etkilenmemesi.
+
+- [ ] `HS-12` Baslat akisinda sayima bagimliligi kaldirma.
+  - Kapsam: indirme baslangicini pre-check'e baglamamak, progresste `islenen/toplam` canli gostermek.
+  - Bitis kriteri: kontrol adimi olmadan da stabil baslatma ve anlik ilerleme goruntusu.
+
 ## Onerilen Uygulama Sirasi
 
 1. `OPS-02`
