@@ -54,8 +54,12 @@ test("verifyAuthPassword should support plain and sha256 formats", () => {
 
 test("resolveApiRequiredRole should map routes correctly", () => {
   assert.equal(_internal.resolveApiRequiredRole("GET", "/tenders"), "viewer");
+  assert.equal(_internal.resolveApiRequiredRole("GET", "/ops/dashboard"), "viewer");
   assert.equal(_internal.resolveApiRequiredRole("POST", "/scrape/run"), "operator");
   assert.equal(_internal.resolveApiRequiredRole("POST", "/ekapv3/start"), "operator");
+  assert.equal(_internal.resolveApiRequiredRole("POST", "/ekapv3/download"), "operator");
+  assert.equal(_internal.resolveApiRequiredRole("POST", "/ekapv3/check"), "operator");
+  assert.equal(_internal.resolveApiRequiredRole("POST", "/ops/benchmark"), "operator");
   assert.equal(_internal.resolveApiRequiredRole("POST", "/downloads/delete"), "admin");
   assert.equal(_internal.resolveApiRequiredRole("POST", "/ekapv3/files/delete"), "admin");
 });
@@ -75,19 +79,64 @@ test("parseScrapeOptions should support allPages mode", () => {
   assert.equal(parsedAllPages.pageRange?.startPage, 1);
   assert.equal(parsedAllPages.pageRange?.endPage, null);
   assert.equal(parsedAllPages.detailConcurrency, 7);
+  assert.equal(parsedAllPages.incrementalSync, true);
 
   const parsedRange = _internal.parseScrapeOptions({
     allPages: false,
     startPage: 3,
     endPage: 6,
     pageSize: 10,
+    writeBatchSize: 180,
+    incremental: false,
+    incrementalStopUnchangedStreak: 19,
+    adaptivePagination: false,
+    adaptivePageSizeMin: 8,
+    adaptivePageSizeMax: 30,
+    adaptivePageSizeStep: 4,
+    adaptivePageTargetMs: 900,
+    adaptiveDetailConcurrency: false,
+    detailConcurrencyMin: 2,
+    detailConcurrencyMax: 9,
+    detailPageTargetMs: 7000,
+    conditionalRequests: false,
+    conditionalCacheTtlMs: 65000,
+    conditionalCacheSize: 250,
+    responseCacheEnabled: false,
+    responseCacheTtlMs: 4500,
+    responseCacheSize: 120,
+    circuitBreakerEnabled: false,
+    circuitBreakerThreshold: 4,
+    circuitBreakerCooldownMs: 22000,
+    circuitBreakerHalfOpenPages: 2,
   });
 
   assert.equal(parsedRange.startSkip, 20);
   assert.equal(parsedRange.maxPages, 4);
+  assert.equal(parsedRange.writeBatchSize, 180);
   assert.equal(parsedRange.pageRange?.allPages, false);
   assert.equal(parsedRange.pageRange?.startPage, 3);
   assert.equal(parsedRange.pageRange?.endPage, 6);
+  assert.equal(parsedRange.incrementalSync, false);
+  assert.equal(parsedRange.incrementalStopUnchangedStreak, 19);
+  assert.equal(parsedRange.adaptivePagination, false);
+  assert.equal(parsedRange.adaptivePageSizeMin, 8);
+  assert.equal(parsedRange.adaptivePageSizeMax, 30);
+  assert.equal(parsedRange.adaptivePageSizeStep, 4);
+  assert.equal(parsedRange.adaptivePageTargetMs, 900);
+  assert.equal(parsedRange.adaptiveDetailConcurrency, false);
+  assert.equal(parsedRange.detailConcurrencyMin, 2);
+  assert.equal(parsedRange.detailConcurrencyMax, 9);
+  assert.equal(parsedRange.detailPageTargetMs, 7000);
+  assert.equal(parsedRange.conditionalRequests, false);
+  assert.equal(parsedRange.conditionalCacheTtlMs, 65000);
+  assert.equal(parsedRange.conditionalCacheSize, 250);
+  assert.equal(parsedRange.responseCacheEnabled, false);
+  assert.equal(parsedRange.responseCacheTtlMs, 4500);
+  assert.equal(parsedRange.responseCacheSize, 120);
+  assert.equal(parsedRange.circuitBreakerEnabled, false);
+  assert.equal(parsedRange.circuitBreakerThreshold, 4);
+  assert.equal(parsedRange.circuitBreakerCooldownMs, 22000);
+  assert.equal(parsedRange.circuitBreakerHalfOpenPages, 2);
 });
 
 test("parseEkapV3Options should support allPages mode", () => {
@@ -96,16 +145,20 @@ test("parseEkapV3Options should support allPages mode", () => {
     fromDate: "2026-03-01",
     toDate: "2026-03-09",
     startPage: 5,
+    startRow: 3,
     endPage: 10,
     allPages: true,
     resumeFromLast: true,
+    workerCount: 4,
     browserMode: "visible",
   });
 
   assert.equal(parsedAllPages.allPages, true);
   assert.equal(parsedAllPages.startPage, 1);
+  assert.equal(parsedAllPages.startRow, 3);
   assert.equal(parsedAllPages.endPage, null);
   assert.equal(parsedAllPages.resumeFromLast, true);
+  assert.equal(parsedAllPages.workerCount, 4);
   assert.equal(parsedAllPages.browserMode, "visible");
 
   const parsedRange = _internal.parseEkapV3Options({
@@ -113,15 +166,75 @@ test("parseEkapV3Options should support allPages mode", () => {
     fromDate: "2026-03-01",
     toDate: "2026-03-09",
     startPage: 3,
+    startRow: 0,
     endPage: 8,
     allPages: false,
+    workerCount: 99,
     browserMode: "headless",
   });
 
   assert.equal(parsedRange.allPages, false);
   assert.equal(parsedRange.startPage, 3);
+  assert.equal(parsedRange.startRow, 1);
   assert.equal(parsedRange.endPage, 8);
   assert.equal(parsedRange.resumeFromLast, false);
+  assert.ok(parsedRange.workerCount >= 1);
+  assert.ok(parsedRange.workerCount <= 8);
+});
+
+test("ekap v3 count payload helpers should build and parse correctly", () => {
+  assert.equal(_internal.formatEkapV3CountDateBoundary("2026-03-01", "start"), "01.03.2026 00:00:00");
+  assert.equal(_internal.formatEkapV3CountDateBoundary("2026-03-01", "end"), "01.03.2026 23:59:00");
+  assert.equal(_internal.formatEkapV3CountDateBoundary("01.03.2026", "start"), "01.03.2026 00:00:00");
+
+  const umPayload = _internal.buildEkapV3CountPayload("uyusmazlik", "2026-03-01", "2026-03-11");
+  const mkPayload = _internal.buildEkapV3CountPayload("mahkeme", "2026-03-01", "2026-03-11");
+  assert.ok(umPayload?.sorgulaKurulKararlari?.keyValuePairs?.keyValueOfstringanyType?.length >= 2);
+  assert.ok(mkPayload?.sorgulaKurulKararlariMk?.keyValuePairs?.keyValueOfstringanyType?.length >= 2);
+
+  const umParsed = _internal.parseEkapV3CountResponse("uyusmazlik", {
+    SorgulaKurulKararlariResponse: {
+      SorgulaKurulKararlariResult: {
+        hataKodu: "0",
+        hataMesaji: "",
+        KurulKararTutanakDetayListesi: [
+          { kurulKararTutanakDetayi: [{ id: 1 }, { id: 2 }] },
+          { kurulKararTutanakDetayi: [{ id: 3 }] },
+        ],
+      },
+    },
+  });
+  assert.equal(umParsed.totalCount, 3);
+  assert.equal(umParsed.totalCountCapped, false);
+  assert.equal(umParsed.estimatedPages, 1);
+
+  const mkParsed = _internal.parseEkapV3CountResponse("mahkeme", {
+    SorgulaKurulKararlariMkResponse: {
+      SorgulaKurulKararlariMkResult: {
+        HataKodu: "0",
+        HataMesaji: "",
+        KurulKararTutanakDetayListesi: [
+          { KurulKararTutanakDetayi: Array.from({ length: 500 }, (_, i) => ({ id: i + 1 })) },
+        ],
+      },
+    },
+  });
+  assert.equal(mkParsed.totalCount, 500);
+  assert.equal(mkParsed.totalCountCapped, true);
+  assert.equal(mkParsed.estimatedPages, 100);
+
+  const emptyParsed = _internal.parseEkapV3CountResponse("uyusmazlik", {
+    SorgulaKurulKararlariResponse: {
+      SorgulaKurulKararlariResult: {
+        hataKodu: "7",
+        hataMesaji: "Kurul Kararlari entegrasyonunda kayıt bulunamamıştır.",
+        KurulKararTutanakDetayListesi: [],
+      },
+    },
+  });
+  assert.equal(emptyParsed.totalCount, 0);
+  assert.equal(emptyParsed.totalCountCapped, false);
+  assert.equal(emptyParsed.estimatedPages, 0);
 });
 
 test("applyEkapV3ResumeOptions should advance start page from last processed page", () => {
@@ -168,6 +281,43 @@ test("applyEkapV3ResumeOptions should reject when selected range is already comp
       }),
     /tamamlan/i,
   );
+});
+
+test("normalizeOpsBenchmarkPayload should sanitize benchmark data", () => {
+  const payload = _internal.normalizeOpsBenchmarkPayload({
+    source: "bench-ci",
+    sampleCount: 6,
+    maxRegressionPct: 22.5,
+    baselineFile: "/tmp/baseline.json",
+    endpoints: [
+      {
+        id: "opsDashboard",
+        path: "/api/ops/dashboard",
+        p95Ms: 120.34,
+        failures: 0,
+      },
+      {
+        id: "",
+        path: "/api/ops/invalid",
+      },
+    ],
+    regressions: [
+      {
+        id: "opsDashboard",
+        path: "/api/ops/dashboard",
+        baselineP95Ms: 80,
+        currentP95Ms: 120,
+        changePct: 50,
+      },
+    ],
+  });
+
+  assert.match(String(payload?.benchmarkId || ""), /^ops-bench-/);
+  assert.equal(payload?.source, "bench-ci");
+  assert.equal(payload?.sampleCount, 6);
+  assert.equal(payload?.summary?.endpointCount, 1);
+  assert.equal(payload?.summary?.regressionCount, 1);
+  assert.equal(payload?.endpoints?.[0]?.id, "opsDashboard");
 });
 
 test("requireApiAuth should enforce role and csrf checks", () => {

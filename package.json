@@ -9,6 +9,7 @@
     "web": "node src/web/server.js",
     "migrate:legacy-downloads": "node scripts/migrate-legacy-downloads.js",
     "db:audit-indexes": "node scripts/db-index-audit.js",
+    "ops:benchmark": "node scripts/ops-benchmark.js",
     "test": "node --test",
     "check:syntax": "node scripts/check-syntax.js",
     "check:repo": "node scripts/repo-guard.js",

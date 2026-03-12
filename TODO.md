@@ -1,161 +1,138 @@
-# Proje To-Do (Guncel)
+# TODO - Hiz, Stabilite ve Kullanim Kolayligi
 
-Bu dosya guncel durum listesidir. Tamamlanan ve bekleyen maddeler birlikte takip edilir.
+Bu dosya sifirdan yeniden olusturuldu. Onceki tum maddeler temizlendi.
 
-## P0 - Kritik
+## P0 - Kullanici Deneyimi ve Akis Duzeltmeleri (Elestiri Maddeleri)
 
-- [x] `AUTH-04` Panel secimi bypass kapat.
-  - Kapsam: panel secimi olmadan `docs.html` ve `downloads.html` gibi statik sayfalarin dogrudan acilmasini engelle.
-  - Bitis kriteri: sadece `/panel/dokumantasyon` veya `/panel/ekapv3` secimi sonrasi ilgili sayfalar aciliyor; dogrudan statik HTML erisimi `302 /` veya `403`.
+- [x] `UX-01` Sayfalar arasi dosya secim kaybi
+  - Sorun: Kullanici bir sayfada dosya secince diger sayfaya gecince secimler dusuyor.
+  - Is: Secimleri sadece filtre degisiminde temizle, pagination gecislerinde koru.
+  - Bitis kriteri: Kullanici sayfa degistirse bile secili dosyalar korunuyor.
 
-- [x] `AUTH-05` Login `next` yonlendirme akisini gercekten aktif et.
-  - Kapsam: auth guard login'e atarken `next` parametresi gondersin; login sonrasi sanitize edilmis hedefe donulsun.
-  - Bitis kriteri: kullanici korunmus bir sayfaya gittiginde login sonrasi ayni sayfaya donuyor.
+- [x] `UX-02` Yaniltici "Tum dosyalari sec" metni
+  - Sorun: Checkbox sadece mevcut sayfayi seciyor, ama metin tum sonuclari seciyor gibi gorunuyor.
+  - Is: Etiketi "Bu sayfadakileri sec" yap veya gercek global secim davranisi ekle.
+  - Bitis kriteri: Metin ve davranis birebir uyumlu.
 
-- [x] `OPS-02` EKAP v3 devam edebilir indirme (resume) tasarimi.
-  - Kapsam: yarim kalan islerde son islenen sayfadan devam secenegi.
-  - Bitis kriteri: operator tek tikla kaldigi yerden devam ettirebiliyor.
+- [x] `UX-03` Canli polling agirligi
+  - Sorun: Status + history cok sik cekiliyor, arayuz akiciligini ve backend yukunu etkiliyor.
+  - Is: History polling'i seyreklet (15-30 sn) veya sadece state degisiminde cek.
+  - Bitis kriteri: Ag trafigi azalirken canli gorunum bozulmuyor.
 
-- [x] `PERF-01` Worker havuzu + eszamanlilik limiti.
-  - Kapsam: tek tek isleme yerine kontrollu paralel isleme (`concurrency: 4-8`).
-  - Bitis kriteri: throughput artisi saglanirken hata orani stabil kaliyor.
+- [x] `UX-04` Dosya listesinin buyuk veride yavaslamasi
+  - Sorun: Her istekte tum dosyalar okunup siralaniyor.
+  - Is: Kisa omurlu cache, artimli listeleme veya metadata index yapisi ekle.
+  - Bitis kriteri: Buyuk klasorlerde sayfa acilis suresi belirgin sekilde dusuyor.
 
-- [x] `REL-01` Akilli retry (gecici hata odakli).
-  - Kapsam: sadece `429/5xx/timeout` durumlarinda exponential backoff + jitter.
-  - Bitis kriteri: gecici hatalarda basariyla toparlanma, kalici hatalarda hizli fail.
+- [x] `UX-05` Ilerleme metninde toplam hedef yok
+  - Sorun: Kullanici "kacinci dosya" bilgisini tam goremiyor.
+  - Is: Mumkunse toplam hedefi ekle (`X / N`), bilinmiyorsa acikca "Toplam bilinmiyor" yaz.
+  - Bitis kriteri: Indirme ilerlemesi bitis tahminiyle birlikte okunabilir.
 
-- [x] `REL-02` Rate limit korumasi.
-  - Kapsam: hedef sistemi zorlamayacak request araligi/throttle mekanizmasi.
-  - Bitis kriteri: istek hizi kontrollu ve hedef tarafta bloklama/timeout azalir.
+- [x] `UX-06` Pagination ergonomisi sinirli
+  - Sorun: Sadece onceki/sonraki ile cok sayfada gezinmek yorucu.
+  - Is: "Ilk", "Son" ve "Sayfaya git" kontrolleri ekle.
+  - Bitis kriteri: 100+ sayfada hizli gezinti mumkun.
 
-- [ ] `DATA-01` Idempotent indirme ve veri cekme.
-  - Kapsam: ayni dosya/ilanin tekrar islenmesini engelleyen unique key/hash kontrolu.
-  - Bitis kriteri: tekrar calistirmada duplicate kayit veya duplicate dosya uretilmez.
+- [x] `UX-07` Baslatma sonrasi teknik izlenebilirlik zayif
+  - Sorun: API trigger olduktan sonra operasyona ait teknik kimlik hemen gorunmuyor.
+  - Is: Run ID ve baslatma zamani bilgisini status satirinda goster.
+  - Bitis kriteri: Destek/debug icin tek bakista kimliklenebilir run bilgisi var.
 
-- [ ] `IO-01` Dosya yazmada atomik guvenlik.
-  - Kapsam: once `.part` yaz, tamamlaninca atomik rename yap.
-  - Bitis kriteri: yarim/bozuk dosyalar son klasore dusmez.
+## P1 - Indirme Islemleri (Playwright) Hiz ve Stabilite
 
-## P1 - Yuksek Oncelik
+- [x] `DL-01` API-first sayim
+  - Is: Indirme oncesi toplam kayit sayisini varsa direkt API response'tan al.
+  - Bitis kriteri: Tarayici uzerinden sayim adimi gerekmiyor.
 
-- [x] `UX-10` Dokumantasyon panelinde detay bildirimlerini geri getir.
-  - Kapsam: `setDetailNotice` no-op yerine gorunur inline status/toast alani.
-  - Bitis kriteri: PDF indirme basari/hata mesaji kullaniciya gorunuyor.
+- [x] `DL-02` Job queue + worker havuzu
+  - Is: Sayfa/satir bazli isleri kuyruga koy, worker sayisini konfigurable yap.
+  - Bitis kriteri: Tek hata tum akisi durdurmuyor, throughput artiyor.
 
-- [x] `OPS-01` Yikici islemler icin audit log.
-  - Kapsam: silme endpointlerinde kim/ne zaman/ne sildi bilgisini kaydet.
-  - Bitis kriteri: admin islemleri geriye donuk izlenebilir.
+- [x] `DL-03` Adaptif concurrency
+  - Is: Hata oranina gore worker sayisini dinamik azalt/artir.
+  - Bitis kriteri: Stabilite korunurken en yuksek guvenli hizda calisiyor.
 
-- [ ] `ARCH-01` Kuyruk ayrimi (liste/detay/pdf).
-  - Kapsam: liste cekme, detay cekme ve pdf indirme adimlarini ayri job queue olarak modelle.
-  - Bitis kriteri: bir adimdaki yavaslama diger adimlari kilitlemiyor.
+- [x] `DL-04` Standart retry policy
+  - Is: Timeout/5xx/ag hatalari icin exponential backoff + jitter merkezi hale getir.
+  - Bitis kriteri: Tum indirme adimlarinda tutarli retry davranisi var.
 
-- [ ] `DB-03` Toplu DB yazimi + index iyilestirme.
-  - Kapsam: tek tek upsert yerine batch upsert ve sorgu desenine uygun index seti.
-  - Bitis kriteri: DB yazma suresi azalir, lock/saturation gozlenmez.
+- [x] `DL-05` Selector saglamlastirma
+  - Is: Kritik selectorler icin fallback stratejileri, gorunurluk ve state tabanli wait kullan.
+  - Bitis kriteri: UI degisikliklerinde kirilma orani dusuyor.
 
-- [ ] `PERF-02` Tarayici optimizasyonu.
-  - Kapsam: gereksiz asset (gorsel/font/script) yuklerini azalt; mumkunse API/HTTP yoluna gec.
-  - Bitis kriteri: sayfa basina ortalama indirme/cekme suresi dusurulur.
+- [x] `DL-06` Download dogrulama katmani
+  - Is: `.crdownload/.part`, minimum boyut, checksum/headers dogrulamasi ekle.
+  - Bitis kriteri: Yarim/incomplete dosyalar basarili sayilmiyor.
 
-- [ ] `REL-03` Tum sayfalar modunda guvenli otomatik bitis.
-  - Kapsam: art arda `N` bos sayfa gorulurse isi kontrollu sonlandir.
-  - Bitis kriteri: sonsuz dongu olmadan dogal veri sonu yakalanir.
+- [x] `DL-07` Idempotent dosya anahtari
+  - Is: `type + kararNo + tarih` gibi deterministic key ile duplicate indirmeyi engelle.
+  - Bitis kriteri: Ayni veri ikinci kez yazilmiyor.
 
-- [ ] `REL-04` Stage bazli timeout ve net hata kodlari.
-  - Kapsam: liste/detay/indirme adimlari icin ayri timeout politikalari.
-  - Bitis kriteri: timeout nedeni ve asama bilgisi log/API durumunda net gorulur.
+- [x] `DL-08` Checkpoint + resume iyilestirme
+  - Is: Son basarili sayfa/satir bilgisi kalici saklansin.
+  - Bitis kriteri: Crash/kill sonrasi minimum kayipla devam.
 
-- [ ] `OBS-01` Izlenebilirlik ve metrikler.
-  - Kapsam: basari orani, ortalama sure, hata tipleri, aktif is sayisi metrikleri.
-  - Bitis kriteri: performans regresyonlari dashboard/log uzerinden hizla tespit edilir.
+- [x] `DL-09` Preflight saglik kontrolu
+  - Is: Baslangicta disk bos alan, yazma izni, hedef endpoint erisimi kontrol et.
+  - Bitis kriteri: Kosullar uygun degilse islem baslamadan net hata donuyor.
 
-## P2 - Teknik Borc
+- [x] `DL-10` Browser context yeniden kullanim
+  - Is: Gereksiz context ac/kapat azalt, kontrollu reuse ve periyodik reset uygula.
+  - Bitis kriteri: Uzun calismalarda bellek ve startup maliyeti dusuyor.
 
-- [x] `DB-02` EKAP v3 log index tutarliligi.
-  - Kapsam: `runId_1` index ile dokuman semasi uyumlulugu (`runId` alanini ekle veya indeksi kaldir).
-  - Bitis kriteri: kullanilan sorgularla birebir uyumlu, gereksiz index yok.
+## P2 - Veri Cekim (API/Scrape) Hiz ve Optimizasyon
 
-- [x] `SEC-05` Login rate limitte IP guvenilirligi.
-  - Kapsam: `x-forwarded-for` guven modelini proxy-aware hale getir (trusted proxy veya dogrudan `req.ip` stratejisi).
-  - Bitis kriteri: spoof edilmis header ile rate-limit bypass edilemiyor.
+- [x] `DC-01` Artimli senkronizasyon (incremental)
+  - Is: Son cekilen tarih/id checkpoint'i ile sadece yeni/degisen kayitlari cek.
+  - Bitis kriteri: Tekrarlanan full scan ihtiyaci ciddi azalir.
 
-- [ ] `REL-05` Circuit breaker uygulamasi.
-  - Kapsam: surekli hata durumunda gecici durdurma ve kontrollu yeniden deneme.
-  - Bitis kriteri: hedef servis sorunlarinda sistem kendini koruyarak toparlaniyor.
+- [x] `DC-02` Batch ve pagination tuning
+  - Is: `limit/pageSize` degerlerini sistem kapasitesine gore optimize et.
+  - Bitis kriteri: Ortalama API tur suresi ve toplam sure duser.
 
-- [ ] `OPS-03` Calisma oncesi saglik kontrolleri.
-  - Kapsam: disk alani, yazma izni, ag durumu, hedef endpoint erisimi pre-check.
-  - Bitis kriteri: kritik kosullar saglanmadan is baslatilmiyor.
+- [x] `DC-03` HTTP keep-alive ve baglanti havuzu
+  - Is: Baglanti tekrar kullanimini ac, uygun timeout/agent ayarlari yap.
+  - Bitis kriteri: Baglanti kurulum overhead'i azalir.
 
-- [ ] `PERF-03` Yuk/soak test paketi.
-  - Kapsam: gercekci veriyle 10-30 dk test, darbozaz olcumleri ve parametre tuning.
-  - Bitis kriteri: kapasite sinirlari ve guvenli default ayarlar dokumante.
+- [x] `DC-04` Paralel detay cekimi kontrolu
+  - Is: Detay endpoint cagrilarinda sinirli paralellik + backpressure uygula.
+  - Bitis kriteri: Rate-limit yemeden throughput artar.
 
-## P1.5 - Hiz ve Stabilite (Yeni)
+- [x] `DC-05` ETag/Last-Modified destegi
+  - Is: Mumkun endpointlerde kosullu istek kullan (`If-None-Match`, `If-Modified-Since`).
+  - Bitis kriteri: Degismeyen veride gereksiz payload inmez.
 
-- [ ] `HS-01` API-first kontrol ve listeleme.
-  - Kapsam: sayim/listeleme adimlarini Selenium yerine dogrudan API ile yapmak.
-  - Bitis kriteri: kontrol/sayim ekrani Selenium bagimsiz calisiyor.
+- [x] `DC-06` Gecici veri cache
+  - Is: Kisa sureli (TTL) response cache ile ayni sorgunun tekrarini azalt.
+  - Bitis kriteri: Tekrarlayan sorgularda cevap suresi anlamli duser.
 
-- [ ] `HS-02` Job queue + worker havuzu.
-  - Kapsam: indirme pipeline'ini queue tabanli calistirip worker sayisini konfigurable yapmak.
-  - Bitis kriteri: worker coktugunde tum akisin durmamasi ve tekrar baslayabilmesi.
+- [x] `DC-07` DB index ve write optimizasyonu
+  - Is: Sorgu yollarina uygun indexler, bulk upsert, write batching uygula.
+  - Bitis kriteri: Yazma ve listeleme performansi artar.
 
-- [ ] `HS-03` Retry politikasini standartlastir.
-  - Kapsam: timeout/5xx/ag kopmasinda ortak exponential backoff + jitter stratejisi.
-  - Bitis kriteri: tum kritik istekler tek tip retry davranisi gosteriyor.
+- [x] `DC-08` Veri kalite ve dedupe pipeline
+  - Is: Normalizasyon + unique key + conflict policy uygula.
+  - Bitis kriteri: Tekrarlanan/kirli kayit orani duser.
 
-- [ ] `HS-04` Idempotent isleme anahtari.
-  - Kapsam: `type + kararNo + tarih` benzeri deterministic key ile duplicate engelleme.
-  - Bitis kriteri: tekrar calismalarda ayni kayit ikinci kez islenmiyor.
+- [x] `DC-09` Circuit breaker ve fail-fast
+  - Is: Ardisik hata durumunda gecici durdurma + kontrollu geri acma ekle.
+  - Bitis kriteri: Dis servis arizasinda sistem kendini korur.
 
-- [ ] `HS-05` Checkpoint/resume guclendirme.
-  - Kapsam: her sayfa/dosya sonrasinda son basarili noktanin kalici saklanmasi.
-  - Bitis kriteri: crash/kill sonrasinda kayip olmadan kaldigi yerden devam.
+- [x] `DC-10` Gozlemlenebilirlik (metrics + tracing)
+  - Is: p50/p95 sure, hata tipleri, retry sayisi, queue length metriklerini topla.
+  - Bitis kriteri: Darbogaz ve regresyonlar olculebilir hale gelir.
 
-- [ ] `HS-06` Selenium explicit wait standardi.
-  - Kapsam: `sleep` kullanimlarini kaldirip stabil selector + explicit wait kullanmak.
-  - Bitis kriteri: zamanlama kaynakli timeout/hata sayisinda dusus.
+## P3 - Operasyon ve Izleme
 
-- [ ] `HS-07` Indirme tamamlama dogrulamasi.
-  - Kapsam: `.crdownload/.part` takibi, boyut/sure dogrulamasi, yarim dosya korumasi.
-  - Bitis kriteri: tamamlanmamis dosyalar basarili sayilmiyor.
+- [x] `OPS-01` Dashboard
+  - Is: Indirme ve veri cekim KPI'larini tek panelde goster.
+  - Bitis kriteri: Operasyon ekibi canli durumu tek ekrandan takip eder.
 
-- [ ] `HS-08` Adaptif concurrency/throttle.
-  - Kapsam: hata oranina gore concurrency otomatik azalt/artir.
-  - Bitis kriteri: hedef servis zorlandiginda otomatik sakinlesme davranisi.
+- [x] `OPS-02` Alarm kurallari
+  - Is: Hata orani, sure asimi, kuyruk birikmesi esikleri icin alarm tanimla.
+  - Bitis kriteri: Kritik durumlar otomatik bildirilir.
 
-- [ ] `HS-09` Otomatik oturum yenileme.
-  - Kapsam: session/login dususlerinde job'u fail etmeden yeniden authenticate etmek.
-  - Bitis kriteri: session timeout kaynakli toplu fail oraninda dusus.
-
-- [ ] `HS-10` Operasyon metrikleri ve dashboard.
-  - Kapsam: success rate, retry sayisi, ortalama sayfa suresi, hata tipleri metrikleri.
-  - Bitis kriteri: regresyonlar metriklerden hizla tespit edilebiliyor.
-
-- [ ] `HS-11` Worker izolasyonu.
-  - Kapsam: indirme worker'larini ayri process/container olarak izole calistirmak.
-  - Bitis kriteri: tek worker hatasinda ana surecin etkilenmemesi.
-
-- [ ] `HS-12` Baslat akisinda sayima bagimliligi kaldirma.
-  - Kapsam: indirme baslangicini pre-check'e baglamamak, progresste `islenen/toplam` canli gostermek.
-  - Bitis kriteri: kontrol adimi olmadan da stabil baslatma ve anlik ilerleme goruntusu.
-
-## Onerilen Uygulama Sirasi
-
-1. `OPS-02`
-2. `PERF-01`
-3. `REL-01`
-4. `REL-02`
-5. `DATA-01`
-6. `IO-01`
-7. `ARCH-01`
-8. `DB-03`
-9. `PERF-02`
-10. `REL-03`
-11. `REL-04`
-12. `OBS-01`
-13. `REL-05`
-14. `OPS-03`
-15. `PERF-03`
+- [x] `OPS-03` Performans regresyon testleri
+  - Is: Haftalik benchmark senaryolari ile sure/hata trendini takip et.
+  - Bitis kriteri: Yavaslama erkenden yakalanir.

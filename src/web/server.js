@@ -13,6 +13,8 @@ const {
   ensureTenderCollectionIndexes,
   ensureEkapV3LogIndexes,
   ensureAuditLogIndexes,
+  ensureOpsAlertIndexes,
+  ensureOpsBenchmarkIndexes,
 } = require("../dbIndexes");
 
 const app = express();
@@ -25,6 +27,7 @@ const SCRAPE_TIMEZONE = "Europe/Istanbul";
 const DELETE_CONFIRMATION_TEXT = "onaylıyorum";
 const EKAP_V3_DIR = path.resolve(__dirname, "../../ekap-v3");
 const EKAP_V3_DOWNLOAD_ROOT_DIR = path.join(EKAP_V3_DIR, "indirilenler");
+const EKAP_V3_CHECKPOINT_DIR = path.join(EKAP_V3_DIR, "checkpoints");
 const EKAP_V3_DOWNLOAD_TYPES = ["mahkeme", "uyusmazlik"];
 const EKAP_V3_DOWNLOAD_DIRS = {
   mahkeme: path.join(EKAP_V3_DOWNLOAD_ROOT_DIR, "mahkeme"),
@@ -33,11 +36,20 @@ const EKAP_V3_DOWNLOAD_DIRS = {
 const EKAP_V3_LOG_COLLECTION =
   process.env.EKAP_V3_LOG_COLLECTION || "ekap_v3_download_logs";
 const AUDIT_LOG_COLLECTION = process.env.AUDIT_LOG_COLLECTION || "audit_logs";
+const OPS_ALERT_COLLECTION = process.env.OPS_ALERT_COLLECTION || "ops_alert_events";
+const OPS_BENCHMARK_COLLECTION = process.env.OPS_BENCHMARK_COLLECTION || "ops_benchmark_runs";
+const EKAP_V3_COUNT_API_URLS = {
+  uyusmazlik: "https://ekapv2.kik.gov.tr/b_ihalearaclari/api/KurulKararlari/GetKurulKararlari",
+  mahkeme: "https://ekapv2.kik.gov.tr/b_ihalearaclari/api/KurulKararlari/GetKurulKararlariMk",
+};
+const EKAP_V3_UI_URL = "https://ekapv2.kik.gov.tr/sorgulamalar/kurul-kararlari";
 
 let mongoClient;
 let collection;
 let ekapV3LogCollection;
 let auditLogCollection;
+let opsAlertCollection;
+let opsBenchmarkCollection;
 const scrapeState = {
   running: false,
   stopRequested: false,
@@ -57,8 +69,14 @@ const ekapV3State = {
   logs: [],
   childProcess: null,
 };
+const opsState = {
+  activeAlertFingerprints: new Set(),
+  lastEvaluatedAt: null,
+  timer: null,
+};
 const authSessions = new Map();
 const loginAttemptState = new Map();
+const ekapV3FilesCache = new Map();
 
 function toInt(value, fallback) {
   const parsed = Number.parseInt(String(value || ""), 10);
@@ -71,6 +89,40 @@ function toBool(value, fallback = false) {
   if (["1", "true", "yes", "on"].includes(text)) return true;
   if (["0", "false", "no", "off"].includes(text)) return false;
   return fallback;
+}
+
+function toFiniteNumber(value, fallback = 0) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
+}
+
+function safeIsoDate(value) {
+  if (!value) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+function toDateOrNull(value) {
+  if (!value) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function computePercentile(values, percentile) {
+  const list = Array.isArray(values)
+    ? values.map((value) => toFiniteNumber(value, NaN)).filter((value) => Number.isFinite(value))
+    : [];
+  if (list.length === 0) return 0;
+  const p = Math.min(1, Math.max(0, toFiniteNumber(percentile, 0.5)));
+  const sorted = [...list].sort((a, b) => a - b);
+  const index = (sorted.length - 1) * p;
+  const lower = Math.floor(index);
+  const upper = Math.ceil(index);
+  if (lower === upper) {
+    return sorted[lower];
+  }
+  const weight = index - lower;
+  return sorted[lower] + (sorted[upper] - sorted[lower]) * weight;
 }
 
 function normalizeAuthRole(value) {
@@ -128,6 +180,35 @@ const AUTH_SESSION_TTL_MS = Math.max(60_000, toInt(process.env.AUTH_SESSION_TTL_
 const AUTH_LOGIN_WINDOW_MS = Math.max(10_000, toInt(process.env.AUTH_LOGIN_WINDOW_MS, 15 * 60 * 1000));
 const AUTH_LOGIN_MAX_ATTEMPTS = Math.max(1, toInt(process.env.AUTH_LOGIN_MAX_ATTEMPTS, 8));
 const WEB_SKIP_OPEN_DIR = toBool(process.env.WEB_SKIP_OPEN_DIR, false);
+const EKAP_V3_FILES_CACHE_TTL_MS = Math.max(1_000, toInt(process.env.EKAP_V3_FILES_CACHE_TTL_MS, 5_000));
+const EKAP_V3_COUNT_TIMEOUT_MS = Math.max(5_000, toInt(process.env.EKAP_V3_COUNT_TIMEOUT_MS, 30_000));
+const EKAP_V3_ROWS_PER_PAGE_ESTIMATE = Math.max(1, toInt(process.env.EKAP_V3_ROWS_PER_PAGE_ESTIMATE, 5));
+const EKAP_V3_WORKER_COUNT_DEFAULT = Math.max(1, toInt(process.env.EKAP_V3_WORKER_COUNT, 1));
+const EKAP_V3_WORKER_COUNT_MAX = Math.max(
+  EKAP_V3_WORKER_COUNT_DEFAULT,
+  Math.max(1, toInt(process.env.EKAP_V3_WORKER_COUNT_MAX, 8)),
+);
+const EKAP_V3_PREFLIGHT_TIMEOUT_MS = Math.max(1_000, toInt(process.env.EKAP_V3_PREFLIGHT_TIMEOUT_MS, 10_000));
+const EKAP_V3_PREFLIGHT_MIN_FREE_BYTES = Math.max(
+  10 * 1024 * 1024,
+  toInt(process.env.EKAP_V3_PREFLIGHT_MIN_FREE_BYTES, 200 * 1024 * 1024),
+);
+const OPS_DASHBOARD_WINDOW_HOURS = Math.max(1, toInt(process.env.OPS_DASHBOARD_WINDOW_HOURS, 24));
+const OPS_ALERT_EVALUATE_INTERVAL_MS = Math.max(
+  10_000,
+  toInt(process.env.OPS_ALERT_EVALUATE_INTERVAL_MS, 60_000),
+);
+const OPS_ALERT_DOWNLOAD_FAILURE_RATE_PCT = Math.max(
+  1,
+  toInt(process.env.OPS_ALERT_DOWNLOAD_FAILURE_RATE_PCT, 18),
+);
+const OPS_ALERT_SCRAPE_LIST_P95_MS = Math.max(500, toInt(process.env.OPS_ALERT_SCRAPE_LIST_P95_MS, 7_000));
+const OPS_ALERT_SCRAPE_DETAIL_P95_MS = Math.max(
+  500,
+  toInt(process.env.OPS_ALERT_SCRAPE_DETAIL_P95_MS, 15_000),
+);
+const OPS_ALERT_SCRAPE_QUEUE_P95 = Math.max(1, toInt(process.env.OPS_ALERT_SCRAPE_QUEUE_P95, 50));
+const OPS_ALERT_STALLED_RUN_MINUTES = Math.max(1, toInt(process.env.OPS_ALERT_STALLED_RUN_MINUTES, 20));
 const AUTH_USERS = parseAuthUsers(process.env.AUTH_USERS);
 const AUTH_ROLE_WEIGHT = {
   viewer: 1,
@@ -180,6 +261,526 @@ function appendEkapV3Log(level, message) {
   }
 }
 
+function toOpsMetric(value, digits = 2) {
+  const number = toFiniteNumber(value, NaN);
+  if (!Number.isFinite(number)) return null;
+  const factor = 10 ** Math.max(0, digits);
+  return Math.round(number * factor) / factor;
+}
+
+function toDurationMs(startValue, endValue) {
+  const start = toDateOrNull(startValue);
+  const end = toDateOrNull(endValue);
+  if (!start || !end) return null;
+  const diff = end.getTime() - start.getTime();
+  if (!Number.isFinite(diff) || diff <= 0) return null;
+  return diff;
+}
+
+function getLatestEkapV3ActivityAt(runLike, logs) {
+  const candidates = [];
+  const checkpointUpdatedAt = runLike?.checkpoint?.updatedAt;
+  if (checkpointUpdatedAt) {
+    candidates.push(checkpointUpdatedAt);
+  }
+  const logRows = Array.isArray(logs) ? logs : [];
+  for (let index = logRows.length - 1; index >= 0; index -= 1) {
+    const timestamp = logRows[index]?.timestamp;
+    if (timestamp) {
+      candidates.push(timestamp);
+      break;
+    }
+  }
+  candidates.push(runLike?.startedAt);
+
+  let latest = null;
+  for (const value of candidates) {
+    const date = toDateOrNull(value);
+    if (!date) continue;
+    if (!latest || date.getTime() > latest.getTime()) {
+      latest = date;
+    }
+  }
+  return latest;
+}
+
+function buildOpsWindowKpisFromRuns(runRows) {
+  const rows = Array.isArray(runRows) ? runRows : [];
+  let downloadedCount = 0;
+  let failedCount = 0;
+  let retryCount = 0;
+  let duplicateCount = 0;
+  let completedRuns = 0;
+  let failedRuns = 0;
+  let stoppedRuns = 0;
+  let runningRuns = 0;
+  const durationMsList = [];
+
+  for (const row of rows) {
+    downloadedCount += Math.max(0, toInt(row?.downloadedCount, 0));
+    failedCount += Math.max(0, toInt(row?.failedCount, 0));
+    retryCount += Math.max(0, toInt(row?.retryCount, 0));
+    duplicateCount += Math.max(0, toInt(row?.duplicateCount, 0));
+
+    const status = String(row?.status || "").trim();
+    if (status === "completed") completedRuns += 1;
+    else if (status === "failed") failedRuns += 1;
+    else if (status === "stopped") stoppedRuns += 1;
+    else if (status === "running") runningRuns += 1;
+
+    const durationMs = toDurationMs(row?.startedAt, row?.finishedAt);
+    if (durationMs !== null) {
+      durationMsList.push(durationMs);
+    }
+  }
+
+  const processedCount = downloadedCount + failedCount;
+  const successRatePct = processedCount > 0 ? (downloadedCount / processedCount) * 100 : 100;
+  const failureRatePct = processedCount > 0 ? (failedCount / processedCount) * 100 : 0;
+  const avgDurationMs =
+    durationMsList.length > 0
+      ? durationMsList.reduce((sum, item) => sum + item, 0) / durationMsList.length
+      : 0;
+  const durationP95Ms = computePercentile(durationMsList, 0.95);
+
+  return {
+    runCount: rows.length,
+    completedRuns,
+    failedRuns,
+    stoppedRuns,
+    runningRuns,
+    processedCount,
+    downloadedCount,
+    failedCount,
+    retryCount,
+    duplicateCount,
+    successRatePct: toOpsMetric(successRatePct, 2),
+    failureRatePct: toOpsMetric(failureRatePct, 2),
+    avgDurationSec: toOpsMetric(avgDurationMs / 1_000, 2),
+    p95DurationSec: toOpsMetric(durationP95Ms / 1_000, 2),
+  };
+}
+
+function buildScrapeOpsSummary() {
+  const lastResult = scrapeState.lastResult && typeof scrapeState.lastResult === "object"
+    ? scrapeState.lastResult
+    : null;
+  const observability = lastResult?.observability && typeof lastResult.observability === "object"
+    ? lastResult.observability
+    : {};
+  const listLatency = observability?.listLatencyMs || {};
+  const detailLatency = observability?.detailLatencyMs || {};
+  const queueDepth = observability?.queueDepth || {};
+  const processed = Math.max(0, toInt(lastResult?.processed, 0));
+  const failed = Math.max(0, toInt(lastResult?.failed, 0));
+  const failureRatePct = processed > 0 ? (failed / processed) * 100 : 0;
+
+  return {
+    running: scrapeState.running,
+    lastRunStartedAt: scrapeState.lastRunStartedAt,
+    lastRunFinishedAt: scrapeState.lastRunFinishedAt,
+    lastError: scrapeState.lastError,
+    hasResult: Boolean(lastResult),
+    processed,
+    saved: Math.max(0, toInt(lastResult?.saved, 0)),
+    failed,
+    retries: Math.max(0, toInt(observability?.retries, 0)),
+    failureRatePct: toOpsMetric(failureRatePct, 2),
+    listLatencyMsP95: toOpsMetric(listLatency?.p95, 1),
+    detailLatencyMsP95: toOpsMetric(detailLatency?.p95, 1),
+    queueDepthP95: toOpsMetric(queueDepth?.p95, 1),
+  };
+}
+
+function buildOpsKpiCards({ windowHours, downloadWindow, runningDownload, scrapeSummary }) {
+  const cards = [
+    {
+      key: "download_runs",
+      title: `Indirme Run (${windowHours} saat)`,
+      value: String(downloadWindow.runCount),
+      hint: `tamam ${downloadWindow.completedRuns} | hata ${downloadWindow.failedRuns} | durdu ${downloadWindow.stoppedRuns}`,
+      tone: "neutral",
+    },
+    {
+      key: "download_success_rate",
+      title: "Indirme Basari",
+      value: `%${downloadWindow.successRatePct ?? 0}`,
+      hint: `${downloadWindow.downloadedCount} basarili / ${downloadWindow.processedCount} islenen`,
+      tone: downloadWindow.successRatePct >= 90 ? "good" : downloadWindow.successRatePct >= 75 ? "warn" : "danger",
+    },
+    {
+      key: "download_p95_duration",
+      title: "Indirme P95 Sure",
+      value: `${downloadWindow.p95DurationSec ?? 0}s`,
+      hint: `ortalama ${downloadWindow.avgDurationSec ?? 0}s`,
+      tone: "neutral",
+    },
+    {
+      key: "scrape_detail_p95",
+      title: "Scrape Detail P95",
+      value: scrapeSummary.detailLatencyMsP95 === null ? "-" : `${scrapeSummary.detailLatencyMsP95}ms`,
+      hint:
+        scrapeSummary.listLatencyMsP95 === null
+          ? "liste p95: -"
+          : `liste p95: ${scrapeSummary.listLatencyMsP95}ms`,
+      tone:
+        scrapeSummary.detailLatencyMsP95 !== null &&
+        scrapeSummary.detailLatencyMsP95 >= OPS_ALERT_SCRAPE_DETAIL_P95_MS
+          ? "danger"
+          : "neutral",
+    },
+    {
+      key: "scrape_queue_p95",
+      title: "Scrape Queue P95",
+      value: scrapeSummary.queueDepthP95 === null ? "-" : String(scrapeSummary.queueDepthP95),
+      hint: `retry: ${scrapeSummary.retries}`,
+      tone:
+        scrapeSummary.queueDepthP95 !== null && scrapeSummary.queueDepthP95 >= OPS_ALERT_SCRAPE_QUEUE_P95
+          ? "warn"
+          : "neutral",
+    },
+    {
+      key: "active_jobs",
+      title: "Aktif Isler",
+      value: String((runningDownload ? 1 : 0) + (scrapeSummary.running ? 1 : 0)),
+      hint: `indirme:${runningDownload ? "acik" : "kapali"} | scrape:${scrapeSummary.running ? "acik" : "kapali"}`,
+      tone: runningDownload || scrapeSummary.running ? "warn" : "good",
+    },
+  ];
+
+  return cards;
+}
+
+function buildOpsAlerts({ downloadWindow, runningDownload, scrapeSummary }) {
+  const alerts = [];
+
+  if (downloadWindow.processedCount >= 20 && downloadWindow.failureRatePct >= OPS_ALERT_DOWNLOAD_FAILURE_RATE_PCT) {
+    alerts.push({
+      id: "download.failure-rate",
+      severity: "critical",
+      source: "download",
+      metric: "failureRatePct",
+      value: toOpsMetric(downloadWindow.failureRatePct, 2),
+      threshold: OPS_ALERT_DOWNLOAD_FAILURE_RATE_PCT,
+      message: `Indirme hata orani yuksek: %${toOpsMetric(downloadWindow.failureRatePct, 2)} (esik %${OPS_ALERT_DOWNLOAD_FAILURE_RATE_PCT})`,
+    });
+  }
+
+  if (runningDownload) {
+    const runningAgeMinutes = toOpsMetric(runningDownload.runningAgeMinutes, 1);
+    const lastProgressAgeMinutes = toOpsMetric(runningDownload.lastProgressAgeMinutes, 1);
+    const progressThreshold = Math.max(3, Math.floor(OPS_ALERT_STALLED_RUN_MINUTES / 2));
+    if (
+      runningAgeMinutes !== null &&
+      lastProgressAgeMinutes !== null &&
+      runningAgeMinutes >= OPS_ALERT_STALLED_RUN_MINUTES &&
+      lastProgressAgeMinutes >= progressThreshold
+    ) {
+      alerts.push({
+        id: "download.stalled-run",
+        severity: "critical",
+        source: "download",
+        metric: "runningAgeMinutes",
+        value: runningAgeMinutes,
+        threshold: OPS_ALERT_STALLED_RUN_MINUTES,
+        message: `Indirme isi takilmis gorunuyor: ${runningAgeMinutes} dk calisma, son ilerleme ${lastProgressAgeMinutes} dk once.`,
+      });
+    }
+  }
+
+  if (scrapeSummary.hasResult && scrapeSummary.listLatencyMsP95 !== null) {
+    if (scrapeSummary.listLatencyMsP95 >= OPS_ALERT_SCRAPE_LIST_P95_MS) {
+      alerts.push({
+        id: "scrape.list-p95",
+        severity: "warning",
+        source: "scrape",
+        metric: "listLatencyMsP95",
+        value: scrapeSummary.listLatencyMsP95,
+        threshold: OPS_ALERT_SCRAPE_LIST_P95_MS,
+        message: `Scrape liste p95 suresi esigi asti: ${scrapeSummary.listLatencyMsP95}ms (esik ${OPS_ALERT_SCRAPE_LIST_P95_MS}ms).`,
+      });
+    }
+  }
+
+  if (scrapeSummary.hasResult && scrapeSummary.detailLatencyMsP95 !== null) {
+    if (scrapeSummary.detailLatencyMsP95 >= OPS_ALERT_SCRAPE_DETAIL_P95_MS) {
+      alerts.push({
+        id: "scrape.detail-p95",
+        severity: "critical",
+        source: "scrape",
+        metric: "detailLatencyMsP95",
+        value: scrapeSummary.detailLatencyMsP95,
+        threshold: OPS_ALERT_SCRAPE_DETAIL_P95_MS,
+        message: `Scrape detay p95 suresi esigi asti: ${scrapeSummary.detailLatencyMsP95}ms (esik ${OPS_ALERT_SCRAPE_DETAIL_P95_MS}ms).`,
+      });
+    }
+  }
+
+  if (scrapeSummary.hasResult && scrapeSummary.queueDepthP95 !== null) {
+    if (scrapeSummary.queueDepthP95 >= OPS_ALERT_SCRAPE_QUEUE_P95) {
+      alerts.push({
+        id: "scrape.queue-p95",
+        severity: "warning",
+        source: "scrape",
+        metric: "queueDepthP95",
+        value: scrapeSummary.queueDepthP95,
+        threshold: OPS_ALERT_SCRAPE_QUEUE_P95,
+        message: `Scrape queue depth p95 yuksek: ${scrapeSummary.queueDepthP95} (esik ${OPS_ALERT_SCRAPE_QUEUE_P95}).`,
+      });
+    }
+  }
+
+  return alerts;
+}
+
+async function publishOpsAlertTransitions(alerts) {
+  const nextIds = new Set((alerts || []).map((item) => String(item?.id || "")));
+  const previousIds = opsState.activeAlertFingerprints;
+  const triggered = (alerts || []).filter((item) => !previousIds.has(String(item?.id || "")));
+  const resolvedIds = [...previousIds].filter((id) => !nextIds.has(id));
+
+  if (triggered.length > 0) {
+    for (const alert of triggered) {
+      console.error(`[OPS_ALERT][${alert.severity}] ${alert.message}`);
+    }
+  }
+
+  if (resolvedIds.length > 0) {
+    for (const id of resolvedIds) {
+      console.log(`[OPS_ALERT][resolved] ${id}`);
+    }
+  }
+
+  if (opsAlertCollection && (triggered.length > 0 || resolvedIds.length > 0)) {
+    const now = new Date();
+    const docs = [];
+    for (const alert of triggered) {
+      docs.push({
+        fingerprint: String(alert.id || ""),
+        status: "triggered",
+        severity: String(alert.severity || "warning"),
+        source: String(alert.source || "ops"),
+        metric: String(alert.metric || ""),
+        value: toFiniteNumber(alert.value, 0),
+        threshold: toFiniteNumber(alert.threshold, 0),
+        message: String(alert.message || ""),
+        payload: alert,
+        createdAt: now,
+      });
+    }
+    for (const id of resolvedIds) {
+      docs.push({
+        fingerprint: String(id || ""),
+        status: "resolved",
+        severity: "info",
+        source: "ops",
+        metric: "",
+        value: 0,
+        threshold: 0,
+        message: `Alarm cozuldu: ${id}`,
+        payload: null,
+        createdAt: now,
+      });
+    }
+    try {
+      if (docs.length > 0) {
+        await opsAlertCollection.insertMany(docs, { ordered: false });
+      }
+    } catch (error) {
+      console.error("[OPS_ALERT_DB_ERROR]", error?.message || error);
+    }
+  }
+
+  opsState.activeAlertFingerprints = nextIds;
+  opsState.lastEvaluatedAt = new Date().toISOString();
+}
+
+async function queryEkapV3RunsForWindow(windowStartDate, limit = 300) {
+  if (ekapV3LogCollection) {
+    return await ekapV3LogCollection
+      .find({
+        startedAt: {
+          $gte: windowStartDate,
+        },
+      })
+      .sort({ startedAt: -1, createdAt: -1 })
+      .limit(limit)
+      .toArray();
+  }
+
+  const rows = [];
+  if (ekapV3State.currentRun) {
+    rows.push({ ...ekapV3State.currentRun });
+  }
+  if (ekapV3State.lastRun) {
+    rows.push({ ...ekapV3State.lastRun });
+  }
+  return rows.filter((row) => {
+    const startedAt = toDateOrNull(row?.startedAt);
+    return startedAt ? startedAt.getTime() >= windowStartDate.getTime() : true;
+  });
+}
+
+async function buildOpsDashboardData(options = {}) {
+  const requestedWindow = Math.max(1, toInt(options.windowHours, OPS_DASHBOARD_WINDOW_HOURS));
+  const windowHours = Math.min(168, requestedWindow);
+  const windowStartDate = new Date(Date.now() - windowHours * 60 * 60 * 1000);
+  const runs = await queryEkapV3RunsForWindow(windowStartDate);
+  const downloadWindow = buildOpsWindowKpisFromRuns(runs);
+  const scrapeSummary = buildScrapeOpsSummary();
+  const activeRun = ekapV3State.running ? ekapV3State.currentRun : null;
+  const latestActivityAt = getLatestEkapV3ActivityAt(activeRun, ekapV3State.logs);
+  const runningStartedAt = toDateOrNull(activeRun?.startedAt);
+  const nowMs = Date.now();
+  const runningDownload = activeRun
+    ? {
+        runId: activeRun?.runId || null,
+        type: activeRun?.type || null,
+        startedAt: safeIsoDate(activeRun?.startedAt),
+        latestActivityAt: safeIsoDate(latestActivityAt),
+        runningAgeMinutes:
+          runningStartedAt && Number.isFinite(nowMs)
+            ? (nowMs - runningStartedAt.getTime()) / (60 * 1000)
+            : null,
+        lastProgressAgeMinutes:
+          latestActivityAt && Number.isFinite(nowMs) ? (nowMs - latestActivityAt.getTime()) / (60 * 1000) : null,
+      }
+    : null;
+
+  const alerts = buildOpsAlerts({
+    downloadWindow,
+    runningDownload,
+    scrapeSummary,
+  });
+  if (options.persistAlerts) {
+    await publishOpsAlertTransitions(alerts);
+  }
+
+  const kpis = buildOpsKpiCards({
+    windowHours,
+    downloadWindow,
+    runningDownload,
+    scrapeSummary,
+  });
+
+  return {
+    generatedAt: new Date().toISOString(),
+    window: {
+      hours: windowHours,
+      from: windowStartDate.toISOString(),
+      to: new Date().toISOString(),
+    },
+    thresholds: {
+      downloadFailureRatePct: OPS_ALERT_DOWNLOAD_FAILURE_RATE_PCT,
+      stalledRunMinutes: OPS_ALERT_STALLED_RUN_MINUTES,
+      scrapeListP95Ms: OPS_ALERT_SCRAPE_LIST_P95_MS,
+      scrapeDetailP95Ms: OPS_ALERT_SCRAPE_DETAIL_P95_MS,
+      scrapeQueueP95: OPS_ALERT_SCRAPE_QUEUE_P95,
+    },
+    downloads: {
+      window: downloadWindow,
+      running: runningDownload,
+      latestRunId: activeRun?.runId || ekapV3State.lastRun?.runId || null,
+      latestStatus: activeRun?.status || ekapV3State.lastRun?.status || null,
+    },
+    scrape: scrapeSummary,
+    alerts,
+    kpis,
+    alertState: {
+      activeCount: alerts.length,
+      lastEvaluatedAt: opsState.lastEvaluatedAt,
+    },
+  };
+}
+
+async function getRecentOpsAlertEvents(limit = 30) {
+  if (!opsAlertCollection) {
+    return [];
+  }
+  const safeLimit = Math.min(200, Math.max(1, toInt(limit, 30)));
+  const rows = await opsAlertCollection
+    .find({})
+    .sort({ createdAt: -1 })
+    .limit(safeLimit)
+    .toArray();
+
+  return rows.map((row) => ({
+    id: row?._id ? String(row._id) : null,
+    fingerprint: row?.fingerprint || null,
+    status: row?.status || null,
+    severity: row?.severity || null,
+    source: row?.source || null,
+    metric: row?.metric || null,
+    value: Number.isFinite(Number(row?.value)) ? Number(row.value) : null,
+    threshold: Number.isFinite(Number(row?.threshold)) ? Number(row.threshold) : null,
+    message: row?.message || "",
+    createdAt: safeIsoDate(row?.createdAt),
+  }));
+}
+
+function normalizeOpsBenchmarkPayload(body) {
+  const payload = body && typeof body === "object" ? body : {};
+  const endpointRows = Array.isArray(payload?.endpoints) ? payload.endpoints : [];
+  const normalizedEndpoints = endpointRows
+    .slice(0, 40)
+    .map((row) => ({
+      id: String(row?.id || "").trim(),
+      path: String(row?.path || "").trim(),
+      p50Ms: toOpsMetric(row?.p50Ms, 2),
+      p95Ms: toOpsMetric(row?.p95Ms, 2),
+      avgMs: toOpsMetric(row?.avgMs, 2),
+      maxMs: toOpsMetric(row?.maxMs, 2),
+      failures: Math.max(0, toInt(row?.failures, 0)),
+    }))
+    .filter((row) => row.id);
+
+  const regressions = Array.isArray(payload?.regressions) ? payload.regressions : [];
+  const normalizedRegressions = regressions
+    .slice(0, 40)
+    .map((row) => ({
+      id: String(row?.id || "").trim(),
+      path: String(row?.path || "").trim(),
+      baselineP95Ms: toOpsMetric(row?.baselineP95Ms, 2),
+      currentP95Ms: toOpsMetric(row?.currentP95Ms, 2),
+      changePct: toOpsMetric(row?.changePct, 2),
+    }))
+    .filter((row) => row.id);
+
+  return {
+    benchmarkId: `ops-bench-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    source: String(payload?.source || "manual").trim() || "manual",
+    baseUrl: String(payload?.baseUrl || "").trim() || null,
+    sampleCount: Math.max(1, toInt(payload?.sampleCount, 1)),
+    maxRegressionPct: toOpsMetric(payload?.maxRegressionPct, 2),
+    baselineFile: String(payload?.baselineFile || "").trim() || null,
+    endpoints: normalizedEndpoints,
+    regressions: normalizedRegressions,
+    summary: {
+      endpointCount: normalizedEndpoints.length,
+      regressionCount: normalizedRegressions.length,
+      failureCount: normalizedEndpoints.reduce((sum, item) => sum + Math.max(0, toInt(item.failures, 0)), 0),
+    },
+    createdAt: new Date(),
+  };
+}
+
+function startOpsAlertMonitor() {
+  if (opsState.timer) {
+    clearInterval(opsState.timer);
+    opsState.timer = null;
+  }
+
+  opsState.timer = setInterval(() => {
+    void buildOpsDashboardData({ persistAlerts: true }).catch((error) => {
+      console.error("[OPS_ALERT_MONITOR_ERROR]", error?.message || error);
+    });
+  }, OPS_ALERT_EVALUATE_INTERVAL_MS);
+
+  if (typeof opsState.timer.unref === "function") {
+    opsState.timer.unref();
+  }
+}
+
 function normalizeEkapV3Type(value) {
   const normalized = String(value || "").trim().toLocaleLowerCase("tr-TR");
   return normalized === "uyusmazlik" ? "uyusmazlik" : normalized === "mahkeme" ? "mahkeme" : "";
@@ -200,8 +801,13 @@ function parseEkapV3Options(body) {
 
   const allPages = toBool(payload.allPages, false);
   const startPage = allPages ? 1 : Math.max(1, toInt(payload.startPage, 1));
+  const startRow = Math.max(1, toInt(payload.startRow, 1));
   const endPage = allPages ? null : Math.max(startPage, toInt(payload.endPage, startPage));
   const resumeFromLast = toBool(payload.resumeFromLast, false);
+  const workerCount = Math.min(
+    EKAP_V3_WORKER_COUNT_MAX,
+    Math.max(1, toInt(payload.workerCount, EKAP_V3_WORKER_COUNT_DEFAULT)),
+  );
   const browserModeRaw = String(payload.browserMode || "headless")
     .trim()
     .toLocaleLowerCase("tr-TR");
@@ -212,11 +818,167 @@ function parseEkapV3Options(body) {
     fromDate,
     toDate,
     startPage,
+    startRow,
     endPage,
     allPages,
     resumeFromLast,
+    workerCount,
     browserMode,
   };
+}
+
+function parsePageAndLimit(query, { defaultLimit, maxLimit }) {
+  const payload = query && typeof query === "object" ? query : {};
+  const limit = Math.min(maxLimit, Math.max(1, toInt(payload.limit, defaultLimit)));
+  const requestedPage = Math.max(1, toInt(payload.page, 1));
+  return {
+    limit,
+    requestedPage,
+  };
+}
+
+function formatEkapV3CountDateBoundary(value, boundary) {
+  const input = String(value || "").trim();
+  const ymd = input.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (ymd) {
+    const dayPart = `${ymd[3]}.${ymd[2]}.${ymd[1]}`;
+    return `${dayPart} ${boundary === "start" ? "00:00:00" : "23:59:00"}`;
+  }
+
+  const dmy = input.match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
+  if (dmy) {
+    const dayPart = `${dmy[1]}.${dmy[2]}.${dmy[3]}`;
+    return `${dayPart} ${boundary === "start" ? "00:00:00" : "23:59:00"}`;
+  }
+
+  throw new Error(`Gecersiz tarih formati: ${value}`);
+}
+
+function buildEkapV3CountPayload(type, fromDate, toDate) {
+  const filters = [
+    {
+      key: "KararTarihi1",
+      value: formatEkapV3CountDateBoundary(fromDate, "start"),
+    },
+    {
+      key: "KararTarihi2",
+      value: formatEkapV3CountDateBoundary(toDate, "end"),
+    },
+  ];
+
+  if (type === "mahkeme") {
+    return {
+      sorgulaKurulKararlariMk: {
+        keyValuePairs: {
+          keyValueOfstringanyType: filters,
+        },
+      },
+    };
+  }
+
+  return {
+    sorgulaKurulKararlari: {
+      keyValuePairs: {
+        keyValueOfstringanyType: filters,
+      },
+    },
+  };
+}
+
+function parseEkapV3CountResponse(type, payload) {
+  const isNoRecordMessage = (value) =>
+    /bulunamami|kayıt bulunamam|kayit bulunamam/i.test(String(value || ""));
+
+  if (type === "mahkeme") {
+    const root = payload?.SorgulaKurulKararlariMkResponse?.SorgulaKurulKararlariMkResult || {};
+    const errorCode = String(root?.HataKodu ?? "").trim();
+    const errorMessage = String(root?.HataMesaji ?? "").trim();
+    if (errorCode && errorCode !== "0" && !isNoRecordMessage(errorMessage)) {
+      throw new Error(errorMessage || `MK API hata kodu: ${errorCode}`);
+    }
+
+    const list = Array.isArray(root?.KurulKararTutanakDetayListesi) ? root.KurulKararTutanakDetayListesi : [];
+    let totalCount = 0;
+    for (const item of list) {
+      const rows = item?.KurulKararTutanakDetayi;
+      if (Array.isArray(rows)) {
+        totalCount += rows.length;
+      }
+    }
+
+    return {
+      totalCount,
+      totalCountCapped: totalCount >= 500,
+      estimatedPages: totalCount > 0 ? Math.ceil(totalCount / EKAP_V3_ROWS_PER_PAGE_ESTIMATE) : 0,
+    };
+  }
+
+  const root = payload?.SorgulaKurulKararlariResponse?.SorgulaKurulKararlariResult || {};
+  const errorCode = String(root?.hataKodu ?? "").trim();
+  const errorMessage = String(root?.hataMesaji ?? "").trim();
+  if (errorCode && errorCode !== "0" && !isNoRecordMessage(errorMessage)) {
+    throw new Error(errorMessage || `UM API hata kodu: ${errorCode}`);
+  }
+
+  const list = Array.isArray(root?.KurulKararTutanakDetayListesi) ? root.KurulKararTutanakDetayListesi : [];
+  let totalCount = 0;
+  for (const item of list) {
+    const rows = item?.kurulKararTutanakDetayi;
+    if (Array.isArray(rows)) {
+      totalCount += rows.length;
+    }
+  }
+
+  return {
+    totalCount,
+    totalCountCapped: totalCount >= 500,
+    estimatedPages: totalCount > 0 ? Math.ceil(totalCount / EKAP_V3_ROWS_PER_PAGE_ESTIMATE) : 0,
+  };
+}
+
+async function fetchEkapV3CountFromApi(options) {
+  const type = normalizeEkapV3Type(options?.type);
+  const fromDate = String(options?.fromDate || "").trim();
+  const toDate = String(options?.toDate || "").trim();
+  const url = EKAP_V3_COUNT_API_URLS[type];
+  if (!url) {
+    throw new Error("Sayim icin gecersiz tur.");
+  }
+  if (!fromDate || !toDate) {
+    throw new Error("Sayim icin tarih araligi zorunlu.");
+  }
+
+  const requestPayload = buildEkapV3CountPayload(type, fromDate, toDate);
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => {
+    controller.abort();
+  }, EKAP_V3_COUNT_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json;charset=UTF-8",
+        Accept: "application/json, text/plain, */*",
+      },
+      body: JSON.stringify(requestPayload),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      throw new Error(`Sayim API istegi basarisiz: ${response.status} ${response.statusText}`);
+    }
+
+    const payload = await response.json();
+    return parseEkapV3CountResponse(type, payload);
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw new Error("Sayim API istegi zaman asimina ugradi.");
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 function getEkapV3LastProcessedPage(runLike) {
@@ -259,6 +1021,7 @@ function applyEkapV3ResumeOptions(options, resumeRun) {
   }
 
   nextOptions.startPage = nextStartPage;
+  nextOptions.startRow = 1;
 
   return {
     options: nextOptions,
@@ -293,11 +1056,197 @@ function isSafeFileName(fileName) {
 
 async function ensureEkapV3DownloadDirs() {
   await fs.promises.mkdir(EKAP_V3_DOWNLOAD_ROOT_DIR, { recursive: true });
+  await fs.promises.mkdir(EKAP_V3_CHECKPOINT_DIR, { recursive: true });
   await Promise.all(
     EKAP_V3_DOWNLOAD_TYPES.map((type) =>
       fs.promises.mkdir(EKAP_V3_DOWNLOAD_DIRS[type], { recursive: true }),
     ),
   );
+}
+
+function toSafeCheckpointSegment(value) {
+  return String(value || "")
+    .trim()
+    .toLocaleLowerCase("tr-TR")
+    .replace(/ı/g, "i")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "") || "x";
+}
+
+function buildEkapV3CheckpointPath(options) {
+  const type = normalizeEkapV3Type(options?.type) || "x";
+  const fromDate = toSafeCheckpointSegment(options?.fromDate);
+  const toDate = toSafeCheckpointSegment(options?.toDate);
+  const fileName = `${type}-${fromDate}-${toDate}.json`;
+  return path.join(EKAP_V3_CHECKPOINT_DIR, fileName);
+}
+
+async function readEkapV3Checkpoint(checkpointPath) {
+  const absolutePath = path.resolve(String(checkpointPath || ""));
+  if (!absolutePath) return null;
+  let raw;
+  try {
+    raw = await fs.promises.readFile(absolutePath, "utf8");
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  }
+
+  let parsed = null;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (_) {
+    return null;
+  }
+
+  const lastSuccess = parsed?.lastSuccess;
+  const page = Math.max(0, toInt(lastSuccess?.page, 0));
+  const row = Math.max(0, toInt(lastSuccess?.row, 0));
+  if (page < 1 || row < 1) {
+    return {
+      path: absolutePath,
+      raw: parsed,
+      lastSuccess: null,
+    };
+  }
+
+  return {
+    path: absolutePath,
+    raw: parsed,
+    lastSuccess: {
+      page,
+      row,
+    },
+  };
+}
+
+function applyEkapV3CheckpointResumeOptions(options, checkpoint) {
+  const nextOptions = {
+    ...(options || {}),
+  };
+  const meta = {
+    applied: false,
+    source: "none",
+    checkpointPath: checkpoint?.path || null,
+    checkpointPage: null,
+    checkpointRow: null,
+  };
+
+  if (!nextOptions.resumeFromLast) {
+    return {
+      options: nextOptions,
+      checkpointMeta: meta,
+    };
+  }
+
+  const lastSuccess = checkpoint?.lastSuccess;
+  if (!lastSuccess) {
+    return {
+      options: nextOptions,
+      checkpointMeta: meta,
+    };
+  }
+
+  const checkpointPage = Math.max(1, toInt(lastSuccess.page, 1));
+  const checkpointRow = Math.max(1, toInt(lastSuccess.row, 1));
+
+  if (!nextOptions.allPages && checkpointPage > nextOptions.endPage) {
+    throw new Error(
+      "Checkpoint secilen bitis sayfasinin disinda. Bitiş sayfasını artırın veya resume kapatıp yeniden başlatın.",
+    );
+  }
+
+  if (checkpointPage > nextOptions.startPage) {
+    nextOptions.startPage = checkpointPage;
+    nextOptions.startRow = checkpointRow + 1;
+  } else if (checkpointPage === nextOptions.startPage) {
+    nextOptions.startRow = Math.max(nextOptions.startRow || 1, checkpointRow + 1);
+  }
+
+  meta.applied = true;
+  meta.source = "checkpoint";
+  meta.checkpointPage = checkpointPage;
+  meta.checkpointRow = checkpointRow;
+
+  return {
+    options: nextOptions,
+    checkpointMeta: meta,
+  };
+}
+
+async function runEkapV3Preflight(options) {
+  const type = normalizeEkapV3Type(options?.type);
+  if (!type) {
+    throw new Error("Preflight icin gecersiz tur.");
+  }
+
+  const downloadDir = EKAP_V3_DOWNLOAD_DIRS[type];
+  await fs.promises.mkdir(downloadDir, { recursive: true });
+  await fs.promises.mkdir(EKAP_V3_CHECKPOINT_DIR, { recursive: true });
+
+  const probePath = path.join(
+    downloadDir,
+    `.probe-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.tmp`,
+  );
+  await fs.promises.writeFile(probePath, "ok", "utf8");
+  await fs.promises.unlink(probePath).catch(() => {});
+
+  let freeBytes = null;
+  try {
+    const statfs = await fs.promises.statfs(downloadDir);
+    const freeBlocks =
+      typeof statfs?.bavail === "bigint" ? Number(statfs.bavail) : Number(statfs?.bavail || 0);
+    const blockSize =
+      typeof statfs?.bsize === "bigint" ? Number(statfs.bsize) : Number(statfs?.bsize || 0);
+    if (Number.isFinite(freeBlocks) && Number.isFinite(blockSize)) {
+      freeBytes = Math.max(0, Math.floor(freeBlocks * blockSize));
+    }
+  } catch (_) {
+    freeBytes = null;
+  }
+
+  if (freeBytes !== null && freeBytes < EKAP_V3_PREFLIGHT_MIN_FREE_BYTES) {
+    throw new Error(
+      `Disk bos alan yetersiz. Gereken: ${EKAP_V3_PREFLIGHT_MIN_FREE_BYTES} byte, mevcut: ${freeBytes} byte.`,
+    );
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => {
+    controller.abort();
+  }, EKAP_V3_PREFLIGHT_TIMEOUT_MS);
+
+  let endpointStatus = null;
+  try {
+    const response = await fetch(EKAP_V3_UI_URL, {
+      method: "GET",
+      signal: controller.signal,
+    });
+    endpointStatus = response.status;
+    if (response.status >= 500) {
+      throw new Error(`EKAP UI endpoint ulasilamaz durumda: HTTP ${response.status}`);
+    }
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw new Error("Preflight endpoint kontrolu zaman asimina ugradi.");
+    }
+    throw new Error(`Preflight endpoint kontrolu basarisiz: ${error?.message || String(error)}`);
+  } finally {
+    clearTimeout(timeoutId);
+  }
+
+  return {
+    ok: true,
+    type,
+    downloadDir,
+    freeBytes,
+    minRequiredFreeBytes: EKAP_V3_PREFLIGHT_MIN_FREE_BYTES,
+    endpoint: EKAP_V3_UI_URL,
+    endpointStatus,
+    checkedAt: new Date().toISOString(),
+  };
 }
 
 async function openPathInFileManager(targetPath) {
@@ -329,10 +1278,18 @@ async function openPathInFileManager(targetPath) {
   });
 }
 
-function setCollectionsForTest(nextCollection, nextEkapV3LogCollection, nextAuditLogCollection) {
+function setCollectionsForTest(
+  nextCollection,
+  nextEkapV3LogCollection,
+  nextAuditLogCollection,
+  nextOpsAlertCollection,
+  nextOpsBenchmarkCollection,
+) {
   collection = nextCollection;
   ekapV3LogCollection = nextEkapV3LogCollection;
   auditLogCollection = nextAuditLogCollection;
+  opsAlertCollection = nextOpsAlertCollection;
+  opsBenchmarkCollection = nextOpsBenchmarkCollection;
 }
 
 async function writeAuditLog(req, action, details = {}) {
@@ -452,6 +1409,49 @@ async function readEkapV3FilesByType(type) {
   return rows;
 }
 
+function clearEkapV3FilesCache() {
+  ekapV3FilesCache.clear();
+}
+
+async function buildEkapV3FilesSnapshot(typeFilter) {
+  const targets = typeFilter ? [typeFilter] : [...EKAP_V3_DOWNLOAD_TYPES];
+  const groupedEntries = await Promise.all(
+    targets.map(async (type) => ({
+      type,
+      rows: await readEkapV3FilesByType(type),
+    })),
+  );
+  const groupedByType = new Map(groupedEntries.map((entry) => [entry.type, entry.rows]));
+  const allRows = groupedEntries
+    .flatMap((entry) => entry.rows)
+    .sort((a, b) => b.updatedAtMs - a.updatedAtMs);
+
+  return {
+    allRows,
+    countByType: {
+      mahkeme: groupedByType.get("mahkeme")?.length || 0,
+      uyusmazlik: groupedByType.get("uyusmazlik")?.length || 0,
+    },
+  };
+}
+
+async function getEkapV3FilesSnapshot(typeFilter) {
+  const key = typeFilter || "__all";
+  const now = Date.now();
+  const cached = ekapV3FilesCache.get(key);
+  if (cached && cached.expiresAt > now) {
+    return cached.value;
+  }
+
+  const value = await buildEkapV3FilesSnapshot(typeFilter);
+  ekapV3FilesCache.set(key, {
+    expiresAt: now + EKAP_V3_FILES_CACHE_TTL_MS,
+    value,
+  });
+
+  return value;
+}
+
 function parseScrapeOptions(body) {
   const options = {};
   const payload = body && typeof body === "object" ? body : {};
@@ -507,6 +1507,155 @@ function parseScrapeOptions(body) {
     options.detailConcurrency = Math.max(
       1,
       Math.min(16, toInt(payload.detailConcurrency, config.detailConcurrency)),
+    );
+  }
+
+  if (payload.writeBatchSize !== undefined) {
+    options.writeBatchSize = Math.max(
+      10,
+      Math.min(1_000, toInt(payload.writeBatchSize, config.writeBatchSize)),
+    );
+  }
+
+  if (payload.incremental !== undefined || payload.incrementalSync !== undefined) {
+    const raw = payload.incrementalSync !== undefined ? payload.incrementalSync : payload.incremental;
+    options.incrementalSync = Boolean(raw);
+  } else {
+    options.incrementalSync = Boolean(config.incrementalSync);
+  }
+
+  if (payload.incrementalStopUnchangedStreak !== undefined) {
+    options.incrementalStopUnchangedStreak = Math.max(
+      5,
+      toInt(payload.incrementalStopUnchangedStreak, config.incrementalStopUnchangedStreak),
+    );
+  }
+
+  if (payload.adaptivePagination !== undefined) {
+    options.adaptivePagination = Boolean(payload.adaptivePagination);
+  } else {
+    options.adaptivePagination = Boolean(config.adaptivePagination);
+  }
+
+  if (payload.adaptivePageSizeMin !== undefined) {
+    options.adaptivePageSizeMin = Math.max(
+      1,
+      toInt(payload.adaptivePageSizeMin, config.adaptivePageSizeMin),
+    );
+  }
+
+  if (payload.adaptivePageSizeMax !== undefined) {
+    options.adaptivePageSizeMax = Math.max(
+      1,
+      toInt(payload.adaptivePageSizeMax, config.adaptivePageSizeMax),
+    );
+  }
+
+  if (payload.adaptivePageSizeStep !== undefined) {
+    options.adaptivePageSizeStep = Math.max(
+      1,
+      toInt(payload.adaptivePageSizeStep, config.adaptivePageSizeStep),
+    );
+  }
+
+  if (payload.adaptivePageTargetMs !== undefined) {
+    options.adaptivePageTargetMs = Math.max(
+      200,
+      toInt(payload.adaptivePageTargetMs, config.adaptivePageTargetMs),
+    );
+  }
+
+  if (payload.adaptiveDetailConcurrency !== undefined) {
+    options.adaptiveDetailConcurrency = Boolean(payload.adaptiveDetailConcurrency);
+  } else {
+    options.adaptiveDetailConcurrency = Boolean(config.adaptiveDetailConcurrency);
+  }
+
+  if (payload.detailConcurrencyMin !== undefined) {
+    options.detailConcurrencyMin = Math.max(
+      1,
+      Math.min(16, toInt(payload.detailConcurrencyMin, config.detailConcurrencyMin)),
+    );
+  }
+
+  if (payload.detailConcurrencyMax !== undefined) {
+    options.detailConcurrencyMax = Math.max(
+      1,
+      Math.min(16, toInt(payload.detailConcurrencyMax, config.detailConcurrencyMax)),
+    );
+  }
+
+  if (payload.detailPageTargetMs !== undefined) {
+    options.detailPageTargetMs = Math.max(
+      500,
+      toInt(payload.detailPageTargetMs, config.detailPageTargetMs),
+    );
+  }
+
+  if (payload.conditionalRequests !== undefined) {
+    options.conditionalRequests = Boolean(payload.conditionalRequests);
+  } else {
+    options.conditionalRequests = Boolean(config.conditionalRequests);
+  }
+
+  if (payload.conditionalCacheTtlMs !== undefined) {
+    options.conditionalCacheTtlMs = Math.max(
+      10_000,
+      toInt(payload.conditionalCacheTtlMs, config.conditionalCacheTtlMs),
+    );
+  }
+
+  if (payload.conditionalCacheSize !== undefined) {
+    options.conditionalCacheSize = Math.max(
+      10,
+      toInt(payload.conditionalCacheSize, config.conditionalCacheSize),
+    );
+  }
+
+  if (payload.responseCacheEnabled !== undefined) {
+    options.responseCacheEnabled = Boolean(payload.responseCacheEnabled);
+  } else {
+    options.responseCacheEnabled = Boolean(config.responseCacheEnabled);
+  }
+
+  if (payload.responseCacheTtlMs !== undefined) {
+    options.responseCacheTtlMs = Math.max(
+      1_000,
+      toInt(payload.responseCacheTtlMs, config.responseCacheTtlMs),
+    );
+  }
+
+  if (payload.responseCacheSize !== undefined) {
+    options.responseCacheSize = Math.max(
+      10,
+      toInt(payload.responseCacheSize, config.responseCacheSize),
+    );
+  }
+
+  if (payload.circuitBreakerEnabled !== undefined) {
+    options.circuitBreakerEnabled = Boolean(payload.circuitBreakerEnabled);
+  } else {
+    options.circuitBreakerEnabled = Boolean(config.circuitBreakerEnabled);
+  }
+
+  if (payload.circuitBreakerThreshold !== undefined) {
+    options.circuitBreakerThreshold = Math.max(
+      1,
+      toInt(payload.circuitBreakerThreshold, config.circuitBreakerThreshold),
+    );
+  }
+
+  if (payload.circuitBreakerCooldownMs !== undefined) {
+    options.circuitBreakerCooldownMs = Math.max(
+      1_000,
+      toInt(payload.circuitBreakerCooldownMs, config.circuitBreakerCooldownMs),
+    );
+  }
+
+  if (payload.circuitBreakerHalfOpenPages !== undefined) {
+    options.circuitBreakerHalfOpenPages = Math.max(
+      1,
+      toInt(payload.circuitBreakerHalfOpenPages, config.circuitBreakerHalfOpenPages),
     );
   }
 
@@ -911,7 +2060,8 @@ function resolveApiRequiredRole(method, apiPath) {
   if (
     verb === "POST" &&
     (/^\/scrape\/(run|stop)$/.test(pathname) ||
-      /^\/ekapv3\/(start|stop)$/.test(pathname) ||
+      /^\/ekapv3\/(start|download|check|stop)$/.test(pathname) ||
+      pathname === "/ops/benchmark" ||
       pathname === "/ekapv3/files/open-dir")
   ) {
     return "operator";
@@ -1125,6 +2275,83 @@ app.post("/api/auth/logout", (req, res) => {
 
 app.use("/api", requireApiAuth);
 
+app.get("/api/ops/dashboard", async (req, res, next) => {
+  try {
+    const requestedWindow = Math.max(1, toInt(req.query?.windowHours, OPS_DASHBOARD_WINDOW_HOURS));
+    const data = await buildOpsDashboardData({ windowHours: Math.min(168, requestedWindow) });
+    res.json({ data });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/ops/alerts", async (req, res, next) => {
+  try {
+    const requestedWindow = Math.max(1, toInt(req.query?.windowHours, OPS_DASHBOARD_WINDOW_HOURS));
+    const dashboard = await buildOpsDashboardData({ windowHours: Math.min(168, requestedWindow) });
+    const recent = await getRecentOpsAlertEvents(toInt(req.query?.limit, 30));
+    res.json({
+      data: {
+        active: dashboard.alerts,
+        recent,
+        activeCount: dashboard.alerts.length,
+        lastEvaluatedAt: dashboard.alertState.lastEvaluatedAt,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/ops/benchmarks", async (req, res, next) => {
+  try {
+    const limit = Math.min(200, Math.max(1, toInt(req.query?.limit, 20)));
+    const rows = opsBenchmarkCollection
+      ? await opsBenchmarkCollection
+          .find({})
+          .sort({ createdAt: -1 })
+          .limit(limit)
+          .toArray()
+      : [];
+
+    res.json({
+      data: rows.map((row) => ({
+        benchmarkId: row?.benchmarkId || null,
+        source: row?.source || null,
+        sampleCount: row?.sampleCount || 0,
+        maxRegressionPct: row?.maxRegressionPct ?? null,
+        baselineFile: row?.baselineFile || null,
+        summary: row?.summary || null,
+        createdAt: safeIsoDate(row?.createdAt),
+      })),
+      meta: {
+        limit,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/ops/benchmark", async (req, res, next) => {
+  try {
+    const payload = normalizeOpsBenchmarkPayload(req.body);
+    if (opsBenchmarkCollection) {
+      await opsBenchmarkCollection.insertOne(payload);
+    }
+    res.status(202).json({
+      data: {
+        saved: true,
+        benchmarkId: payload.benchmarkId,
+        createdAt: safeIsoDate(payload.createdAt),
+        summary: payload.summary,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/api/scrape/status", (_, res) => {
   res.json({
     data: {
@@ -1251,7 +2478,7 @@ app.get("/api/ekapv3/status", (_, res) => {
   });
 });
 
-app.post("/api/ekapv3/start", async (req, res, next) => {
+const handleEkapV3Start = async (req, res, next) => {
   try {
     if (ekapV3State.running) {
       res.status(409).json({ error: "EKAP v3 indirme işlemi zaten çalışıyor." });
@@ -1263,6 +2490,26 @@ app.post("/api/ekapv3/start", async (req, res, next) => {
       ...requestedOptions,
     };
     let resumeMeta = null;
+    const checkpointPath = buildEkapV3CheckpointPath(requestedOptions);
+    let checkpointMeta = {
+      applied: false,
+      source: "none",
+      checkpointPath,
+      checkpointPage: null,
+      checkpointRow: null,
+    };
+    let preflight = null;
+    let countPreflight = {
+      available: false,
+      source: "ekap-api",
+      total: null,
+      capped: false,
+      estimatedPages: null,
+      rowsPerPageEstimate: EKAP_V3_ROWS_PER_PAGE_ESTIMATE,
+      error: null,
+    };
+
+    const checkpointState = await readEkapV3Checkpoint(checkpointPath);
 
     if (requestedOptions.resumeFromLast) {
       const resumeRun = ekapV3LogCollection
@@ -1278,22 +2525,66 @@ app.post("/api/ekapv3/start", async (req, res, next) => {
             .next()
         : null;
 
-      const resumeResult = applyEkapV3ResumeOptions(requestedOptions, resumeRun);
-      options = resumeResult.options;
-      resumeMeta = resumeResult.resumeMeta;
+      if (resumeRun) {
+        const resumeResult = applyEkapV3ResumeOptions(requestedOptions, resumeRun);
+        options = resumeResult.options;
+        resumeMeta = {
+          ...resumeResult.resumeMeta,
+          source: "history",
+        };
+      } else if (!checkpointState?.lastSuccess) {
+        throw new Error(
+          "Kaldığı yerden devam için aynı tür ve tarih aralığında durdurulmuş/başarısız bir çalışma veya checkpoint bulunamadı.",
+        );
+      }
+    }
+
+    const checkpointResumeResult = applyEkapV3CheckpointResumeOptions(options, checkpointState);
+    options = checkpointResumeResult.options;
+    checkpointMeta = checkpointResumeResult.checkpointMeta;
+    if (requestedOptions.resumeFromLast && !resumeMeta && checkpointMeta.applied) {
+      resumeMeta = {
+        enabled: true,
+        baseRunId: null,
+        lastProcessedPage: checkpointMeta.checkpointPage,
+        resumedFromPage: options.startPage,
+        source: "checkpoint",
+      };
+    }
+
+    preflight = await runEkapV3Preflight(options);
+
+    try {
+      const count = await fetchEkapV3CountFromApi(options);
+      countPreflight = {
+        available: true,
+        source: "ekap-api",
+        total: count.totalCount,
+        capped: count.totalCountCapped,
+        estimatedPages: count.estimatedPages,
+        rowsPerPageEstimate: EKAP_V3_ROWS_PER_PAGE_ESTIMATE,
+        error: null,
+      };
+    } catch (error) {
+      countPreflight.error = error?.message || String(error);
     }
 
     await ensureEkapV3DownloadDirs();
     const scriptName =
       options.type === "mahkeme"
-        ? "ekap-selenium-mahkeme.js"
-        : "ekap-selenium-uyusmazlik.js";
+        ? "ekap-playwright-mahkeme.js"
+        : "ekap-playwright-uyusmazlik.js";
     const args = [
       scriptName,
       `--from=${options.fromDate}`,
       `--to=${options.toDate}`,
       `--startPage=${options.startPage}`,
+      `--startRow=${options.startRow}`,
+      `--workerCount=${options.workerCount}`,
       `--browserMode=${options.browserMode}`,
+      "--checkpoint=true",
+      `--checkpointPath=${checkpointPath}`,
+      `--resetCheckpoint=${requestedOptions.resumeFromLast ? "false" : "true"}`,
     ];
     if (options.allPages) {
       args.push("--allPages=true");
@@ -1311,18 +2602,30 @@ app.post("/api/ekapv3/start", async (req, res, next) => {
       fromDate: options.fromDate,
       toDate: options.toDate,
       startPage: options.startPage,
+      startRow: options.startRow,
       endPage: options.endPage,
       allPages: options.allPages,
       resumeFromLast: Boolean(requestedOptions.resumeFromLast),
       resumeApplied: Boolean(resumeMeta),
       resumeBaseRunId: resumeMeta?.baseRunId || null,
       resumeFromPage: resumeMeta?.resumedFromPage ?? null,
+      resumeFromRow: options.startRow,
+      checkpointPath,
+      checkpointMeta,
+      workerCount: options.workerCount,
       browserMode: options.browserMode,
       status: "running",
       stopRequested: false,
       downloadedCount: 0,
       failedCount: 0,
       retryCount: 0,
+      duplicateCount: 0,
+      checkpoint: null,
+      preflight,
+      totalTargetCount: countPreflight.available ? countPreflight.total : null,
+      totalTargetCountCapped: countPreflight.available ? countPreflight.capped : false,
+      estimatedTotalPages: countPreflight.available ? countPreflight.estimatedPages : null,
+      countSource: countPreflight.source,
       pagesProcessed: [],
       exitCode: null,
       signal: null,
@@ -1341,7 +2644,34 @@ app.post("/api/ekapv3/start", async (req, res, next) => {
         } resumedFromPage=${resumeMeta.resumedFromPage}`,
       );
     }
+    if (checkpointMeta?.checkpointPath) {
+      appendEkapV3Log(
+        checkpointMeta.applied ? "info" : "warn",
+        `[CHECKPOINT] path=${checkpointMeta.checkpointPath} applied=${checkpointMeta.applied ? "1" : "0"} page=${
+          checkpointMeta.checkpointPage || "-"
+        } row=${checkpointMeta.checkpointRow || "-"}`,
+      );
+    }
+    if (preflight) {
+      appendEkapV3Log(
+        "info",
+        `[PREFLIGHT] endpointStatus=${preflight.endpointStatus} freeBytes=${
+          preflight.freeBytes === null ? "n/a" : preflight.freeBytes
+        } minRequired=${preflight.minRequiredFreeBytes}`,
+      );
+    }
     appendEkapV3Log("info", `[RUN] Baslatildi: ${scriptName} ${args.slice(1).join(" ")}`);
+    appendEkapV3Log("info", `[POOL] workerCount=${options.workerCount}`);
+    if (countPreflight.available) {
+      appendEkapV3Log(
+        "info",
+        `[COUNT] source=${countPreflight.source} total=${countPreflight.total}${
+          countPreflight.capped ? "+" : ""
+        } estimatedPages=${countPreflight.estimatedPages || 0}`,
+      );
+    } else {
+      appendEkapV3Log("warn", `[COUNT] source=${countPreflight.source} unavailable: ${countPreflight.error || "-"}`);
+    }
 
     if (ekapV3LogCollection) {
       await ekapV3LogCollection.insertOne({
@@ -1353,6 +2683,7 @@ app.post("/api/ekapv3/start", async (req, res, next) => {
         },
         selectedPages: {
           startPage: options.startPage,
+          startRow: options.startRow,
           endPage: options.endPage,
           allPages: options.allPages,
         },
@@ -1362,13 +2693,25 @@ app.post("/api/ekapv3/start", async (req, res, next) => {
           baseRunId: resumeMeta?.baseRunId || null,
           lastProcessedPage: resumeMeta?.lastProcessedPage ?? null,
           resumedFromPage: resumeMeta?.resumedFromPage ?? null,
+          resumedFromRow: options.startRow,
         },
+        checkpointPath,
+        checkpointMeta,
+        checkpoint: null,
+        preflight,
+        workerCount: options.workerCount,
         browserMode: options.browserMode,
         status: "running",
         stopRequested: false,
         downloadedCount: 0,
         failedCount: 0,
         retryCount: 0,
+        duplicateCount: 0,
+        totalTargetCount: countPreflight.available ? countPreflight.total : null,
+        totalTargetCountCapped: countPreflight.available ? countPreflight.capped : false,
+        estimatedTotalPages: countPreflight.available ? countPreflight.estimatedPages : null,
+        countSource: countPreflight.source,
+        countPreflight,
         pagesProcessed: [],
         startedAt: new Date(startedAt),
         finishedAt: null,
@@ -1417,8 +2760,32 @@ app.post("/api/ekapv3/start", async (req, res, next) => {
           continue;
         }
 
-        if (/ERR_CONNECTION_TIMED_OUT.*retrying/i.test(line)) {
+        const duplicateMatch = line.match(/^Page\s+(\d+),\s+row\s+\d+:\s+duplicate-skip\./i);
+        if (duplicateMatch) {
+          current.duplicateCount = (current.duplicateCount || 0) + 1;
+          const pageNo = toInt(duplicateMatch[1], 0);
+          if (pageNo > 0 && !current.pagesProcessed.includes(pageNo)) {
+            current.pagesProcessed.push(pageNo);
+          }
+          continue;
+        }
+
+        if (/^Page\s+\d+,\s+row\s+\d+:\s+retry\s+\d+\/\d+/i.test(line)) {
           current.retryCount += 1;
+          continue;
+        }
+
+        const checkpointMatch = line.match(
+          /^\[CHECKPOINT\]\s+page=(\d+)\s+row=(\d+)\s+success=(\d)\s+duplicate=(\d)/i,
+        );
+        if (checkpointMatch) {
+          current.checkpoint = {
+            page: toInt(checkpointMatch[1], 0),
+            row: toInt(checkpointMatch[2], 0),
+            success: checkpointMatch[3] === "1",
+            duplicate: checkpointMatch[4] === "1",
+            updatedAt: new Date().toISOString(),
+          };
           continue;
         }
 
@@ -1499,6 +2866,8 @@ app.post("/api/ekapv3/start", async (req, res, next) => {
               downloadedCount: current.downloadedCount,
               failedCount: current.failedCount,
               retryCount: current.retryCount,
+              duplicateCount: current.duplicateCount || 0,
+              checkpoint: current.checkpoint || null,
               pagesProcessed: [...current.pagesProcessed].sort((a, b) => a - b),
               finishedAt: new Date(finishedAt),
               exitCode: code,
@@ -1514,6 +2883,29 @@ app.post("/api/ekapv3/start", async (req, res, next) => {
       data: {
         running: true,
         currentRun,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+app.post("/api/ekapv3/start", handleEkapV3Start);
+app.post("/api/ekapv3/download", handleEkapV3Start);
+app.post("/api/ekapv3/check", async (req, res, next) => {
+  try {
+    const options = parseEkapV3Options(req.body);
+    const count = await fetchEkapV3CountFromApi(options);
+    res.json({
+      data: {
+        type: options.type,
+        fromDate: options.fromDate,
+        toDate: options.toDate,
+        totalCount: count.totalCount,
+        totalCountCapped: count.totalCountCapped,
+        estimatedPages: count.estimatedPages,
+        rowsPerPageEstimate: EKAP_V3_ROWS_PER_PAGE_ESTIMATE,
+        source: "ekap-api",
       },
     });
   } catch (error) {
@@ -1549,11 +2941,19 @@ app.post("/api/ekapv3/stop", (req, res) => {
 
 app.get("/api/ekapv3/history", async (req, res, next) => {
   try {
-    const limit = Math.min(500, Math.max(1, toInt(req.query.limit, 100)));
+    const { limit, requestedPage } = parsePageAndLimit(req.query, {
+      defaultLimit: 10,
+      maxLimit: 500,
+    });
+    const total = ekapV3LogCollection ? await ekapV3LogCollection.countDocuments({}) : 0;
+    const totalPages = Math.max(1, Math.ceil(total / limit));
+    const page = total > 0 ? Math.min(requestedPage, totalPages) : 1;
+    const skip = (page - 1) * limit;
     const rows = ekapV3LogCollection
       ? await ekapV3LogCollection
           .find({})
           .sort({ startedAt: -1, createdAt: -1 })
+          .skip(skip)
           .limit(limit)
           .toArray()
       : [];
@@ -1565,11 +2965,22 @@ app.get("/api/ekapv3/history", async (req, res, next) => {
         dateRange: row?.dateRange || null,
         selectedPages: row?.selectedPages || null,
         resume: row?.resume || null,
+        checkpointPath: row?.checkpointPath || null,
+        checkpointMeta: row?.checkpointMeta || null,
+        checkpoint: row?.checkpoint || null,
+        preflight: row?.preflight || null,
+        workerCount: row?.workerCount || 1,
         status: row?.status || null,
         stopRequested: Boolean(row?.stopRequested),
         downloadedCount: row?.downloadedCount || 0,
         failedCount: row?.failedCount || 0,
         retryCount: row?.retryCount || 0,
+        duplicateCount: row?.duplicateCount || 0,
+        totalTargetCount: row?.totalTargetCount ?? row?.countPreflight?.total ?? null,
+        totalTargetCountCapped: Boolean(row?.totalTargetCountCapped ?? row?.countPreflight?.capped),
+        estimatedTotalPages: row?.estimatedTotalPages ?? row?.countPreflight?.estimatedPages ?? null,
+        countSource: row?.countSource || row?.countPreflight?.source || null,
+        countPreflight: row?.countPreflight || null,
         pagesProcessed: Array.isArray(row?.pagesProcessed)
           ? row.pagesProcessed
           : [],
@@ -1577,6 +2988,12 @@ app.get("/api/ekapv3/history", async (req, res, next) => {
         finishedAt: row?.finishedAt || null,
         exitCode: row?.exitCode ?? null,
       })),
+      meta: {
+        total,
+        page,
+        limit,
+        totalPages,
+      },
     });
   } catch (error) {
     next(error);
@@ -1586,19 +3003,17 @@ app.get("/api/ekapv3/history", async (req, res, next) => {
 app.get("/api/ekapv3/files", async (req, res, next) => {
   try {
     const typeFilter = resolveEkapV3DownloadType(req.query.type);
-    const limit = Math.min(2000, Math.max(1, toInt(req.query.limit, 500)));
-    const targets = typeFilter ? [typeFilter] : [...EKAP_V3_DOWNLOAD_TYPES];
-
-    const grouped = await Promise.all(targets.map((type) => readEkapV3FilesByType(type)));
-    const rows = grouped
-      .flat()
-      .sort((a, b) => b.updatedAtMs - a.updatedAtMs)
-      .slice(0, limit);
-
-    const countByType = {
-      mahkeme: grouped[targets.indexOf("mahkeme")]?.length || 0,
-      uyusmazlik: grouped[targets.indexOf("uyusmazlik")]?.length || 0,
-    };
+    const { limit, requestedPage } = parsePageAndLimit(req.query, {
+      defaultLimit: 10,
+      maxLimit: 2000,
+    });
+    const snapshot = await getEkapV3FilesSnapshot(typeFilter);
+    const allRows = snapshot.allRows;
+    const total = allRows.length;
+    const totalPages = Math.max(1, Math.ceil(total / limit));
+    const page = total > 0 ? Math.min(requestedPage, totalPages) : 1;
+    const skip = (page - 1) * limit;
+    const rows = allRows.slice(skip, skip + limit);
 
     res.json({
       data: rows.map((row) => ({
@@ -1608,9 +3023,12 @@ app.get("/api/ekapv3/files", async (req, res, next) => {
         updatedAt: row.updatedAt,
       })),
       meta: {
-        total: rows.length,
+        total,
+        page,
+        limit,
+        totalPages,
         type: typeFilter || null,
-        countByType,
+        countByType: snapshot.countByType,
       },
     });
   } catch (error) {
@@ -1705,6 +3123,7 @@ app.post("/api/ekapv3/files/delete", async (req, res, next) => {
       }
 
       const result = await deleteEkapV3Files(files);
+      clearEkapV3FilesCache();
       await writeAuditLog(req, "ekapv3.files.delete.selected", {
         mode,
         requestCount: files.length,
@@ -1730,6 +3149,7 @@ app.post("/api/ekapv3/files/delete", async (req, res, next) => {
 
       const files = await readEkapV3FilesByType(type);
       const result = await deleteEkapV3Files(files);
+      clearEkapV3FilesCache();
       await writeAuditLog(req, "ekapv3.files.delete.byType", {
         mode,
         type,
@@ -1753,6 +3173,7 @@ app.post("/api/ekapv3/files/delete", async (req, res, next) => {
       const grouped = await Promise.all(EKAP_V3_DOWNLOAD_TYPES.map((type) => readEkapV3FilesByType(type)));
       const files = grouped.flat();
       const result = await deleteEkapV3Files(files);
+      clearEkapV3FilesCache();
       await writeAuditLog(req, "ekapv3.files.delete.all", {
         mode,
         targetCount: files.length,
@@ -2209,10 +3630,18 @@ async function start() {
   collection = db.collection(config.mongodbCollection);
   ekapV3LogCollection = db.collection(EKAP_V3_LOG_COLLECTION);
   auditLogCollection = db.collection(AUDIT_LOG_COLLECTION);
+  opsAlertCollection = db.collection(OPS_ALERT_COLLECTION);
+  opsBenchmarkCollection = db.collection(OPS_BENCHMARK_COLLECTION);
   await ensureTenderCollectionIndexes(collection);
   await ensureEkapV3LogIndexes(ekapV3LogCollection);
   await ensureAuditLogIndexes(auditLogCollection);
+  await ensureOpsAlertIndexes(opsAlertCollection);
+  await ensureOpsBenchmarkIndexes(opsBenchmarkCollection);
   await ensureEkapV3DownloadDirs();
+  startOpsAlertMonitor();
+  await buildOpsDashboardData({ persistAlerts: true }).catch((error) => {
+    console.error("[OPS_ALERT_INIT_ERROR]", error?.message || error);
+  });
 
   app.listen(WEB_PORT, WEB_HOST, () => {
     console.log(`[WEB] UI hazir: http://${WEB_HOST}:${WEB_PORT}`);
@@ -2234,6 +3663,12 @@ module.exports = {
     parseAuthUsers,
     parseScrapeOptions,
     parseEkapV3Options,
+    formatEkapV3CountDateBoundary,
+    buildEkapV3CountPayload,
+    parseEkapV3CountResponse,
+    buildOpsDashboardData,
+    getRecentOpsAlertEvents,
+    normalizeOpsBenchmarkPayload,
     getEkapV3LastProcessedPage,
     applyEkapV3ResumeOptions,
     verifyAuthPassword,
@@ -2252,6 +3687,7 @@ module.exports = {
     loginAttemptState,
     scrapeState,
     ekapV3State,
+    opsState,
     AUTH_USERS,
     AUTH_ENABLED,
   },
