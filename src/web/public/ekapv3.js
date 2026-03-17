@@ -55,6 +55,7 @@ const el = {
   startButton: document.getElementById("startButton"),
   stopButton: document.getElementById("stopButton"),
   logMeta: document.getElementById("v3LogMeta"),
+  clearLogsButton: document.getElementById("v3ClearLogsButton"),
   liveLog: document.getElementById("v3LiveLog"),
   logFirstButton: document.getElementById("v3LogFirstButton"),
   logPrevButton: document.getElementById("v3LogPrevButton"),
@@ -64,6 +65,7 @@ const el = {
   logJumpInput: document.getElementById("v3LogJumpInput"),
   logJumpButton: document.getElementById("v3LogJumpButton"),
   historyMeta: document.getElementById("v3HistoryMeta"),
+  clearHistoryButton: document.getElementById("v3ClearHistoryButton"),
   historyBody: document.getElementById("v3HistoryBody"),
   historyFirstButton: document.getElementById("v3HistoryFirstButton"),
   historyPrevButton: document.getElementById("v3HistoryPrevButton"),
@@ -326,6 +328,8 @@ function readFormPayload() {
 function renderStatus() {
   el.startButton.disabled = state.running;
   el.stopButton.disabled = !state.running;
+  el.clearLogsButton.disabled = state.logs.length === 0;
+  el.clearHistoryButton.disabled = state.running || state.historyTotal === 0;
 
   if (state.running) {
     const run = state.currentRun;
@@ -467,6 +471,7 @@ function renderLogs() {
   const rows = state.logs.slice(startIndex, startIndex + state.logLimit);
 
   el.logMeta.textContent = `${total} kayıt`;
+  el.clearLogsButton.disabled = total === 0;
   el.logPageInfo.textContent = `Sayfa ${state.logPage} / ${totalPages}`;
   el.logFirstButton.disabled = state.logPage <= 1;
   el.logPrevButton.disabled = state.logPage <= 1;
@@ -498,6 +503,7 @@ function renderLogs() {
 function renderHistory() {
   const rows = state.history;
   el.historyMeta.textContent = `${state.historyTotal} kayıt`;
+  el.clearHistoryButton.disabled = state.running || state.historyTotal === 0;
   el.historyPageInfo.textContent = `Sayfa ${state.historyPage} / ${state.historyTotalPages}`;
   el.historyFirstButton.disabled = state.historyPage <= 1;
   el.historyPrevButton.disabled = state.historyPage <= 1;
@@ -818,6 +824,52 @@ async function runDeleteAllFiles() {
   });
 }
 
+async function runClearLogs() {
+  if (!state.logs.length) {
+    setStatus("Temizlenecek canlı log kaydı yok.");
+    return;
+  }
+
+  openConfirmationDialog({
+    title: "Canlı Logları Temizle",
+    message: "Canlı log kayıtları temizlenecek. Bu işlem geri alınamaz.",
+    action: async (confirmation) => {
+      const payload = await postJson("/api/ekapv3/logs/clear", {
+        confirmation,
+      });
+      const clearedCount = Number(payload?.data?.clearedCount || 0);
+      state.logPage = 1;
+      await refreshStatus();
+      setStatus(`${clearedCount} log kaydı temizlendi.`, "success");
+    },
+  });
+}
+
+async function runClearHistory() {
+  if (state.running) {
+    throw new Error("EKAP v3 çalışırken indirme geçmişi temizlenemez.");
+  }
+  if (state.historyTotal <= 0) {
+    setStatus("Temizlenecek indirme geçmişi kaydı yok.");
+    return;
+  }
+
+  openConfirmationDialog({
+    title: "İndirme Geçmişini Temizle",
+    message: "İndirme geçmişi kayıtları tamamen temizlenecek. Bu işlem geri alınamaz.",
+    action: async (confirmation) => {
+      const payload = await postJson("/api/ekapv3/history/clear", {
+        confirmation,
+      });
+      const deletedCount = Number(payload?.data?.deletedCount || 0);
+      state.historyPage = 1;
+      await refreshHistory();
+      await refreshOpsDashboard();
+      setStatus(`${deletedCount} geçmiş kaydı temizlendi.`, "success");
+    },
+  });
+}
+
 async function openDownloadsFolder() {
   const type = String(el.filesTypeFilter.value || "").trim();
   await postJson("/api/ekapv3/files/open-dir", {
@@ -882,6 +934,13 @@ el.logJumpInput.addEventListener("keydown", (event) => {
   state.logPage = clampPage(el.logJumpInput.value, totalPages);
   renderLogs();
 });
+
+el.clearLogsButton.addEventListener(
+  "click",
+  withAsyncStatus(async () => {
+    await runClearLogs();
+  }, "Canlı loglar temizlenemedi."),
+);
 
 el.stopButton.addEventListener(
   "click",
@@ -953,6 +1012,13 @@ el.historyJumpInput.addEventListener(
     state.historyPage = clampPage(el.historyJumpInput.value, state.historyTotalPages);
     await refreshHistory();
   }, "Geçmiş listesi alınamadı."),
+);
+
+el.clearHistoryButton.addEventListener(
+  "click",
+  withAsyncStatus(async () => {
+    await runClearHistory();
+  }, "İndirme geçmişi temizlenemedi."),
 );
 
 el.filesRefreshButton.addEventListener(

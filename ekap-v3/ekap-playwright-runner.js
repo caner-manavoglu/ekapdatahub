@@ -21,10 +21,14 @@ const SELECTORS = {
   pagination: ['div.dx-page[role="button"]', '.dx-page[role="button"]'],
   selectedPage: ['div.dx-page.dx-selection', '.dx-page.dx-selection'],
   downloadButtons: [
+    '#ctl00_ContentPlaceHolder1_downloadKararUyuşmazlik',
+    'a#ctl00_ContentPlaceHolder1_downloadKararUyuşmazlik',
+    'input#ctl00_ContentPlaceHolder1_downloadKararUyuşmazlik',
     '#ctl00_ContentPlaceHolder1_downloadKarar',
     'a#ctl00_ContentPlaceHolder1_downloadKarar',
     'input#ctl00_ContentPlaceHolder1_downloadKarar',
     '[id$="downloadKarar"]',
+    '[id*="downloadKarar"]',
   ],
 };
 
@@ -141,6 +145,9 @@ const isRetryableBrowserError = (error) => {
   if (message.includes('timed out') || message.includes('timeout')) return true;
   if (message.includes('err_connection_') || message.includes('net::err_')) return true;
   if (message.includes('target closed')) return true;
+  if (message.includes('detail popup/page did not open after clicking detail icon')) return true;
+  if (message.includes('visible selector bulunamadi')) return true;
+  if (message.includes('download button element handle not available')) return true;
   if (/\b5\d{2}\b/.test(message)) return true;
   return false;
 };
@@ -205,6 +212,243 @@ const ensureDirWriteAccess = async (dirPath) => {
   await fs.promises.unlink(probePath).catch(() => {});
 };
 
+const waitForStableFile = async (targetPath, timeoutMs = 7000, intervalMs = 250) => {
+  const startedAt = Date.now();
+  let lastSize = -1;
+  let stableTicks = 0;
+
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      const stat = await fs.promises.stat(targetPath);
+      if (!stat.isFile()) {
+        throw new Error('not-a-file');
+      }
+      if (stat.size > 0 && stat.size === lastSize) {
+        stableTicks += 1;
+      } else {
+        stableTicks = 0;
+      }
+      lastSize = stat.size;
+      if (stableTicks >= 2) {
+        return;
+      }
+    } catch (_) {
+      // File may not be visible yet; keep polling.
+    }
+    await sleep(intervalMs);
+  }
+
+  throw new Error(`Downloaded file did not stabilize in time: ${path.basename(targetPath)}`);
+};
+
+const parseContentDispositionFileName = (value) => {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+
+  const starMatch = raw.match(/filename\*\s*=\s*([^;]+)/i);
+  if (starMatch && starMatch[1]) {
+    let token = starMatch[1].trim().replace(/^"(.*)"$/, '$1');
+    const encodedMatch = token.match(/^[^']*'[^']*'(.*)$/);
+    if (encodedMatch && encodedMatch[1]) {
+      token = encodedMatch[1];
+    }
+    try {
+      return decodeURIComponent(token).trim();
+    } catch (_) {
+      return token.trim();
+    }
+  }
+
+  const plainMatch = raw.match(/filename\s*=\s*("([^"]+)"|[^;]+)/i);
+  if (!plainMatch || !plainMatch[1]) return '';
+  return String(plainMatch[2] || plainMatch[1]).trim().replace(/^"(.*)"$/, '$1');
+};
+
+const ensurePdfExtension = (fileName, fallbackStem = 'ekap') => {
+  const safe = sanitizeFileName(fileName || '');
+  if (!safe) {
+    return `${sanitizeFileName(fallbackStem) || 'ekap'}.pdf`;
+  }
+  return /\.pdf$/i.test(safe) ? safe : `${safe}.pdf`;
+};
+
+const buildFallbackFileNameFromMeta = (meta) => {
+  const kararNo = sanitizeFileName(meta?.kararNo || '');
+  const kararTarihi = sanitizeFileName(String(meta?.kararTarihi || '').replace(/[./\\]/g, '-'));
+  const stem = [kararNo, kararTarihi].filter(Boolean).join('_');
+  return ensurePdfExtension(stem || `ekap-${Date.now()}`);
+};
+
+const extractApiDownloadSpecFromButton = async (downloadButton) =>
+  downloadButton.evaluate((button) => {
+    const parsePostback = (text) => {
+      const script = String(text || '');
+      if (!script) return null;
+
+      const patterns = [
+        /__doPostBack\(\s*['"]([^'"]+)['"]\s*,\s*['"]([^'"]*)['"]\s*\)/i,
+        /WebForm_PostBackOptions\(\s*['"]([^'"]+)['"]\s*,\s*['"]([^'"]*)['"]/i,
+      ];
+      for (const pattern of patterns) {
+        const match = script.match(pattern);
+        if (match && match[1]) {
+          return {
+            target: String(match[1] || '').trim(),
+            argument: String(match[2] || '').trim(),
+          };
+        }
+      }
+      return null;
+    };
+
+    const collectFormFields = (form) => {
+      if (!form) return {};
+      const payload = {};
+      const fields = Array.from(form.elements || []);
+      for (const field of fields) {
+        if (!field || !field.name || field.disabled) continue;
+        const type = String(field.type || '').toLowerCase();
+        if ((type === 'checkbox' || type === 'radio') && !field.checked) continue;
+        if (field.tagName === 'SELECT' && field.multiple) {
+          const selectedValues = Array.from(field.selectedOptions || []).map((opt) => String(opt.value || ''));
+          payload[field.name] = selectedValues.join(',');
+          continue;
+        }
+        payload[field.name] = String(field.value || '');
+      }
+      return payload;
+    };
+
+    const locationHref = String(window.location.href || '');
+    const hrefRaw = String(button.getAttribute('href') || '').trim();
+    const hrefScript = hrefRaw.toLowerCase().startsWith('javascript:') ? hrefRaw.slice(11) : '';
+    const onclickScript = String(button.getAttribute('onclick') || '');
+    const scriptText = `${onclickScript}\n${hrefScript}`;
+    const postback = parsePostback(scriptText);
+    const form = button.form || document.forms?.[0] || null;
+    const method = String(form?.getAttribute('method') || 'POST').trim().toUpperCase() || 'POST';
+    const actionRaw = String(form?.getAttribute('action') || locationHref).trim() || locationHref;
+    const actionUrl = new URL(actionRaw, locationHref).toString();
+    const formPayload = collectFormFields(form);
+
+    if (hrefRaw && !hrefRaw.toLowerCase().startsWith('javascript:')) {
+      return {
+        mode: 'GET',
+        url: new URL(hrefRaw, locationHref).toString(),
+        form: {},
+        source: 'href',
+      };
+    }
+
+    if (postback?.target) {
+      formPayload.__EVENTTARGET = postback.target;
+      formPayload.__EVENTARGUMENT = postback.argument || '';
+      return {
+        mode: 'POST',
+        url: actionUrl,
+        form: formPayload,
+        source: 'postback',
+      };
+    }
+
+    const buttonName = String(button.getAttribute('name') || button.name || '').trim();
+    if (buttonName) {
+      formPayload[buttonName] = String(button.getAttribute('value') || button.value || '1');
+      return {
+        mode: method === 'GET' ? 'GET' : 'POST',
+        url: actionUrl,
+        form: formPayload,
+        source: 'form-submit',
+      };
+    }
+
+    return {
+      mode: 'UNKNOWN',
+      url: actionUrl,
+      form: formPayload,
+      source: 'unknown',
+    };
+  });
+
+const downloadViaApiRequest = async ({
+  context,
+  popup,
+  downloadButton,
+  downloadsDir,
+  meta,
+  minDownloadBytes,
+  enforcePdfHeader,
+}) => {
+  const spec = await extractApiDownloadSpecFromButton(downloadButton);
+  if (!spec || !spec.url || spec.mode === 'UNKNOWN') {
+    throw new Error('API-first request spec could not be inferred from detail page.');
+  }
+
+  const requestOptions = {
+    method: String(spec.mode || 'GET').toUpperCase(),
+    timeout: 35_000,
+    failOnStatusCode: false,
+    headers: {
+      Accept: 'application/pdf,application/octet-stream,*/*',
+      Referer: popup.url(),
+    },
+  };
+
+  if (requestOptions.method === 'POST') {
+    requestOptions.form = spec.form && typeof spec.form === 'object' ? spec.form : {};
+  } else if (requestOptions.method === 'GET' && spec.form && Object.keys(spec.form).length > 0) {
+    const url = new URL(spec.url);
+    for (const [key, value] of Object.entries(spec.form)) {
+      url.searchParams.set(String(key), String(value ?? ''));
+    }
+    spec.url = url.toString();
+  }
+
+  const response = await context.request.fetch(spec.url, requestOptions);
+  const statusCode = Number(response.status());
+  if (!response.ok()) {
+    throw new Error(`API-first request failed: status=${statusCode} source=${spec.source}`);
+  }
+
+  const payload = await response.body();
+  if (!payload || payload.length < minDownloadBytes) {
+    throw new Error(`API-first response too small: ${payload ? payload.length : 0} bytes`);
+  }
+
+  const headers = response.headers();
+  const contentType = String(headers['content-type'] || '').toLowerCase();
+  if (
+    contentType &&
+    !contentType.includes('pdf') &&
+    !contentType.includes('octet-stream') &&
+    !contentType.includes('application/download')
+  ) {
+    // Do not hard-fail solely by content-type; header can be wrong.
+    console.warn(`[API-FIRST] non-pdf content-type detected: ${contentType}`);
+  }
+
+  const contentDisposition = String(headers['content-disposition'] || '');
+  const headerFileName = parseContentDispositionFileName(contentDisposition);
+  const fallbackFileName = buildFallbackFileNameFromMeta(meta);
+  const targetName = ensurePdfExtension(headerFileName || fallbackFileName);
+  const targetPath = ensureUniquePath(downloadsDir, targetName);
+  await fs.promises.writeFile(targetPath, payload);
+  await waitForStableFile(targetPath);
+
+  const validation = await validateDownloadedFile({
+    targetPath,
+    minDownloadBytes,
+    enforcePdfHeader,
+  });
+
+  return {
+    status: 'downloaded',
+    fileName: path.basename(targetPath),
+    ...validation,
+    transport: 'api-first',
+  };
+};
+
 const waitForVisibleSelector = async (page, selectors, timeoutMs = 15000) => {
   const list = Array.isArray(selectors) ? selectors.filter(Boolean) : [];
   if (!list.length) {
@@ -234,9 +478,9 @@ const waitForVisibleSelector = async (page, selectors, timeoutMs = 15000) => {
 
 const waitForAnyGridSignal = async (page, timeoutMs = 20000) => {
   await page.waitForFunction(
-    (iconSelectors, noDataSelectors) => {
+    ({ iconSelectors, noDataSelectors }) => {
       const hasAnyVisible = (selectors) =>
-        selectors.some((selector) =>
+        (Array.isArray(selectors) ? selectors : []).some((selector) =>
           Array.from(document.querySelectorAll(selector)).some((el) => el.offsetParent !== null),
         );
 
@@ -244,8 +488,10 @@ const waitForAnyGridSignal = async (page, timeoutMs = 20000) => {
       if (hasAnyVisible(noDataSelectors)) return true;
       return false;
     },
-    SELECTORS.detailIcons,
-    SELECTORS.noData,
+    {
+      iconSelectors: SELECTORS.detailIcons,
+      noDataSelectors: SELECTORS.noData,
+    },
     { timeout: timeoutMs },
   );
 };
@@ -291,6 +537,43 @@ const clickVisibleDetailIconAt = async (page, index) => {
   if (!clicked) {
     throw new Error(`Detail icon index ${index} not found.`);
   }
+};
+
+const openDetailPopupOrPage = async ({
+  context,
+  page,
+  rowIndex,
+  attempts = 3,
+  perAttemptTimeoutMs = 7000,
+}) => {
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const popupPromise = page.waitForEvent('popup', { timeout: perAttemptTimeoutMs }).catch(() => null);
+    const contextPagePromise = context.waitForEvent('page', { timeout: perAttemptTimeoutMs }).catch(() => null);
+
+    await clickVisibleDetailIconAt(page, rowIndex);
+    const [popupFromPage, popupFromContext] = await Promise.all([popupPromise, contextPagePromise]);
+    const popup = popupFromPage || (popupFromContext && popupFromContext !== page ? popupFromContext : null);
+    if (popup) {
+      return popup;
+    }
+
+    const openedInline = await page
+      .evaluate(
+        (downloadSelectors) =>
+          downloadSelectors.some((selector) =>
+            Array.from(document.querySelectorAll(selector)).some((el) => el.offsetParent !== null),
+          ),
+        SELECTORS.downloadButtons,
+      )
+      .catch(() => false);
+    if (openedInline) {
+      return page;
+    }
+
+    await sleep(Math.min(1200, 250 * attempt));
+  }
+
+  throw new Error('Detail popup/page did not open after clicking detail icon.');
 };
 
 const readPdfHeader = async (filePath) => {
@@ -427,8 +710,19 @@ const createIdempotencyStore = async ({ downloadsDir, type }) => {
     reserve(key) {
       const safeKey = String(key || '').trim();
       if (!safeKey) return { accepted: false, reason: 'empty-key' };
-      if (seen.has(safeKey) || inflight.has(safeKey)) {
+      if (inflight.has(safeKey)) {
         return { accepted: false, reason: 'duplicate' };
+      }
+      if (seen.has(safeKey)) {
+        const entry = seen.get(safeKey);
+        const fileName = String(entry?.fileName || '').trim();
+        const filePath = fileName ? path.join(downloadsDir, fileName) : '';
+        if (filePath && fs.existsSync(filePath)) {
+          return { accepted: false, reason: 'duplicate' };
+        }
+        // Manifestte var ama dosya yoksa stale kabul et, tekrar indir.
+        seen.delete(safeKey);
+        void persist();
       }
       inflight.add(safeKey);
       return { accepted: true, reason: 'reserved' };
@@ -576,6 +870,32 @@ const clickLocator = async (locator) => {
     if (!handle) throw error;
     await handle.evaluate((el) => el.click());
   }
+};
+
+const clickLocatorWithFallbacks = async (locator) => {
+  await locator.scrollIntoViewIfNeeded().catch(() => {});
+  try {
+    await locator.click({ timeout: 6000 });
+    return;
+  } catch (_) {
+    // fallback-1
+  }
+  try {
+    await locator.click({ timeout: 6000, force: true });
+    return;
+  } catch (_) {
+    // fallback-2
+  }
+  const handle = await locator.elementHandle();
+  if (!handle) {
+    throw new Error('Download button element handle not available.');
+  }
+  await handle.evaluate((el) => {
+    if (typeof el.scrollIntoView === 'function') {
+      el.scrollIntoView({ block: 'center', inline: 'center' });
+    }
+    el.click();
+  });
 };
 
 const waitForDatepickerOpen = async (page) => {
@@ -748,43 +1068,84 @@ const closeExtraPages = async (context, mainPage) => {
 };
 
 const clickDownloadInDetail = async ({
+  context,
   popup,
   downloadsDir,
   downloadType,
   idempotencyStore,
   minDownloadBytes,
   enforcePdfHeader,
+  apiFirstDownload,
+  apiFirstStrict,
 }) => {
   const meta = await extractDecisionMetaFromPopup(popup).catch(() => ({
     kararNo: '',
     kararTarihi: '',
     url: '',
   }));
-  const decisionKey = buildDecisionIdempotencyKey({
-    type: downloadType,
-    meta,
-    suggestedFileName: meta?.url || '',
-  });
-
-  if (idempotencyStore) {
-    const reserveResult = idempotencyStore.reserve(decisionKey);
-    if (!reserveResult.accepted && reserveResult.reason === 'duplicate') {
-      return {
-        status: 'duplicate',
-        key: decisionKey,
-      };
-    }
-  }
 
   const selector = await waitForVisibleSelector(popup, SELECTORS.downloadButtons, 20000);
   const downloadButton = popup.locator(selector).first();
+  await downloadButton.waitFor({ state: 'visible', timeout: 10000 });
 
   let targetPath = '';
   try {
-    const [download] = await Promise.all([
-      popup.waitForEvent('download', { timeout: 25000 }),
-      clickLocator(downloadButton),
-    ]);
+    if (apiFirstDownload) {
+      try {
+        const apiResult = await downloadViaApiRequest({
+          context,
+          popup,
+          downloadButton,
+          downloadsDir,
+          meta,
+          minDownloadBytes,
+          enforcePdfHeader,
+        });
+        if (idempotencyStore) {
+          const decisionKey = buildDecisionIdempotencyKey({
+            type: downloadType,
+            meta,
+            suggestedFileName: apiResult.fileName,
+          });
+          idempotencyStore.commit(decisionKey, {
+            key: decisionKey,
+            type: downloadType,
+            kararNo: meta?.kararNo || '',
+            kararTarihi: meta?.kararTarihi || '',
+            fileName: apiResult.fileName,
+            sha256: apiResult.sha256,
+            sizeBytes: apiResult.sizeBytes,
+            transport: apiResult.transport || 'api-first',
+          });
+        }
+        return {
+          status: 'downloaded',
+          fileName: apiResult.fileName,
+          sizeBytes: apiResult.sizeBytes,
+          sha256: apiResult.sha256,
+          transport: apiResult.transport || 'api-first',
+        };
+      } catch (apiError) {
+        if (apiFirstStrict) {
+          throw new Error(`API-first strict mode failed: ${apiError?.message || String(apiError)}`);
+        }
+        console.warn(`API-first failed, fallback to UI download -> ${apiError?.message || String(apiError)}`);
+      }
+    }
+
+    const waitDownload = () => context.waitForEvent('download', { timeout: 30000 });
+    let download;
+    try {
+      const pendingDownload = waitDownload();
+      await clickLocatorWithFallbacks(downloadButton);
+      download = await pendingDownload;
+    } catch (firstError) {
+      const pendingDownload = waitDownload();
+      await clickLocator(downloadButton);
+      download = await pendingDownload.catch(() => {
+        throw firstError;
+      });
+    }
 
     const targetName = sanitizeFileName(download.suggestedFilename() || `ekap-${Date.now()}.pdf`);
     targetPath = ensureUniquePath(downloadsDir, targetName);
@@ -794,6 +1155,7 @@ const clickDownloadInDetail = async ({
     if (failure) {
       throw new Error(`Download failed: ${failure}`);
     }
+    await waitForStableFile(targetPath);
 
     const validation = await validateDownloadedFile({
       targetPath,
@@ -802,6 +1164,11 @@ const clickDownloadInDetail = async ({
     });
 
     if (idempotencyStore) {
+      const decisionKey = buildDecisionIdempotencyKey({
+        type: downloadType,
+        meta,
+        suggestedFileName: path.basename(targetPath),
+      });
       idempotencyStore.commit(decisionKey, {
         key: decisionKey,
         type: downloadType,
@@ -810,19 +1177,17 @@ const clickDownloadInDetail = async ({
         fileName: path.basename(targetPath),
         sha256: validation.sha256,
         sizeBytes: validation.sizeBytes,
+        transport: 'ui-download',
       });
     }
 
     return {
       status: 'downloaded',
-      key: decisionKey,
       fileName: path.basename(targetPath),
       ...validation,
+      transport: 'ui-download',
     };
   } catch (error) {
-    if (idempotencyStore) {
-      idempotencyStore.release(decisionKey);
-    }
     if (targetPath) {
       await fs.promises.unlink(targetPath).catch(() => {});
     }
@@ -842,6 +1207,8 @@ const processCurrentPageRows = async ({
   downloadType,
   minDownloadBytes,
   enforcePdfHeader,
+  apiFirstDownload,
+  apiFirstStrict,
 }) => {
   let rowIndex = Math.max(0, toBoundedInt(startRow, 1, 1) - 1);
   let downloaded = 0;
@@ -871,25 +1238,42 @@ const processCurrentPageRows = async ({
         },
         task: async () => {
           let popup = null;
+          let inlineDetail = false;
           try {
-            const popupPromise = page.waitForEvent('popup', { timeout: 10000 });
-            await clickVisibleDetailIconAt(page, rowIndex);
-            popup = await popupPromise;
-
-            await popup.waitForLoadState('domcontentloaded', { timeout: 20000 });
+            popup = await openDetailPopupOrPage({
+              context,
+              page,
+              rowIndex,
+              attempts: 3,
+              perAttemptTimeoutMs: 7000,
+            });
+            inlineDetail = popup === page;
+            if (!inlineDetail) {
+              await popup.waitForLoadState('domcontentloaded', { timeout: 20000 });
+            }
             const output = await clickDownloadInDetail({
+              context,
               popup,
               downloadsDir,
               downloadType,
               idempotencyStore,
               minDownloadBytes,
               enforcePdfHeader,
+              apiFirstDownload,
+              apiFirstStrict,
             });
-            await popup.close().catch(() => {});
+            if (!inlineDetail) {
+              await popup.close().catch(() => {});
+            } else {
+              await page.keyboard.press('Escape').catch(() => {});
+            }
             return output;
           } catch (error) {
-            if (popup) {
+            if (popup && popup !== page) {
               await popup.close().catch(() => {});
+            }
+            if (inlineDetail) {
+              await page.keyboard.press('Escape').catch(() => {});
             }
             await closeExtraPages(context, page);
             throw error;
@@ -897,29 +1281,18 @@ const processCurrentPageRows = async ({
         },
       });
 
-      if (result?.status === 'duplicate') {
-        duplicates += 1;
-        checkpointManager?.markProcessed({
-          pageNo,
-          rowNo,
-          success: false,
-          duplicate: true,
-        });
-        console.log(`Page ${pageNo}, row ${rowNo}: duplicate-skip.`);
-      } else {
-        downloaded += 1;
-        checkpointManager?.markProcessed({
-          pageNo,
-          rowNo,
-          success: true,
-          duplicate: false,
-        });
-        console.log(
-          `Page ${pageNo}, row ${rowNo}: downloaded. size=${result?.sizeBytes || 0} sha256=${
-            result?.sha256 || '-'
-          }`,
-        );
-      }
+      downloaded += 1;
+      checkpointManager?.markProcessed({
+        pageNo,
+        rowNo,
+        success: true,
+        duplicate: false,
+      });
+      console.log(
+        `Page ${pageNo}, row ${rowNo}: downloaded. transport=${result?.transport || 'unknown'} size=${
+          result?.sizeBytes || 0
+        } sha256=${result?.sha256 || '-'}`,
+      );
     } catch (err) {
       console.error(`Page ${pageNo}, row ${rowNo}: failed -> ${err.message}`);
       await closeExtraPages(context, page);
@@ -1086,6 +1459,8 @@ const processPagesFromCurrent = async ({
   downloadType,
   minDownloadBytes,
   enforcePdfHeader,
+  apiFirstDownload,
+  apiFirstStrict,
 }) => {
   const workerSuffix = workerId ? ` [worker ${workerId}]` : '';
   let pageCursor = currentPage;
@@ -1113,6 +1488,8 @@ const processPagesFromCurrent = async ({
         downloadType,
         minDownloadBytes,
         enforcePdfHeader,
+        apiFirstDownload,
+        apiFirstStrict,
       });
       downloaded += pageStats.downloaded;
       failed += pageStats.failed;
@@ -1371,6 +1748,8 @@ const runSingleWorker = async ({
   downloadType,
   minDownloadBytes,
   enforcePdfHeader,
+  apiFirstDownload,
+  apiFirstStrict,
   contextResetAfterPages,
 }) => {
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ekapv2-chrome-'));
@@ -1429,6 +1808,8 @@ const runSingleWorker = async ({
         downloadType,
         minDownloadBytes,
         enforcePdfHeader,
+        apiFirstDownload,
+        apiFirstStrict,
       });
 
       totals.downloaded += stats.downloaded;
@@ -1496,6 +1877,8 @@ const runQueueWorker = async ({
   downloadType,
   minDownloadBytes,
   enforcePdfHeader,
+  apiFirstDownload,
+  apiFirstStrict,
   contextResetAfterJobs,
 }) => {
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), `ekapv2-chrome-w${workerId}-`));
@@ -1579,6 +1962,8 @@ const runQueueWorker = async ({
           downloadType,
           minDownloadBytes,
           enforcePdfHeader,
+          apiFirstDownload,
+          apiFirstStrict,
         });
 
         jobStats = stats;
@@ -1657,6 +2042,8 @@ const runWorkerPool = async ({
   downloadType,
   minDownloadBytes,
   enforcePdfHeader,
+  apiFirstDownload,
+  apiFirstStrict,
 }) => {
   const jobs = buildPageJobs(startPage, endPage, chunkSize);
   const queue = createPageJobQueue(jobs);
@@ -1691,6 +2078,8 @@ const runWorkerPool = async ({
       downloadType,
       minDownloadBytes,
       enforcePdfHeader,
+      apiFirstDownload,
+      apiFirstStrict,
       contextResetAfterJobs,
     }),
   );
@@ -1820,6 +2209,8 @@ async function runEkapDownloader(config) {
     50 * 1024 * 1024,
   );
   const enforcePdfHeader = toBoolArg(getArg('enforcePdfHeader', process.env.ENFORCE_PDF_HEADER || 'true'), true);
+  const apiFirstDownload = toBoolArg(getArg('apiFirstDownload', process.env.API_FIRST_DOWNLOAD || 'true'), true);
+  const apiFirstStrict = toBoolArg(getArg('apiFirstStrict', process.env.API_FIRST_STRICT || 'false'), false);
   const checkpointPath = String(getArg('checkpointPath', process.env.CHECKPOINT_PATH || '')).trim();
   const checkpointEnabled = toBoolArg(getArg('checkpoint', process.env.CHECKPOINT_ENABLED || 'true'), true);
   const resetCheckpoint = toBoolArg(getArg('resetCheckpoint', process.env.RESET_CHECKPOINT || 'false'), false);
@@ -1832,10 +2223,7 @@ async function runEkapDownloader(config) {
   const downloadsDir = path.join(process.cwd(), 'indirilenler', type);
   await ensureDirWriteAccess(downloadsDir);
 
-  const idempotencyStore = await createIdempotencyStore({
-    downloadsDir,
-    type,
-  });
+  const idempotencyStore = null;
 
   if (resetCheckpoint && checkpointPath) {
     await fs.promises.unlink(checkpointPath).catch(() => {});
@@ -1864,7 +2252,8 @@ async function runEkapDownloader(config) {
   console.log(`Context reset: jobs=${contextResetAfterJobs} pages=${contextResetAfterPages}`);
   console.log(`Adaptive concurrency: ${adaptiveConcurrency && effectiveWorkerCount > 1 ? 'on' : 'off'}`);
   console.log(`Download validation: minBytes=${minDownloadBytes} pdfHeader=${enforcePdfHeader ? 'on' : 'off'}`);
-  console.log(`Idempotency manifest: ${idempotencyStore.manifestPath} entries=${idempotencyStore.size()}`);
+  console.log(`API-first download: enabled=${apiFirstDownload ? 'on' : 'off'} strict=${apiFirstStrict ? 'on' : 'off'}`);
+  console.log('Duplicate control: off (all rows will be downloaded)');
   if (checkpointManager.enabled) {
     console.log(`Checkpoint: ${checkpointManager.path}`);
     const last = checkpointManager.getLastSuccess();
@@ -1905,6 +2294,8 @@ async function runEkapDownloader(config) {
             downloadType: type,
             minDownloadBytes,
             enforcePdfHeader,
+            apiFirstDownload,
+            apiFirstStrict,
           })
         : await runSingleWorker({
             cfg,
@@ -1923,13 +2314,14 @@ async function runEkapDownloader(config) {
             downloadType: type,
             minDownloadBytes,
             enforcePdfHeader,
+            apiFirstDownload,
+            apiFirstStrict,
             contextResetAfterPages,
           });
   } catch (error) {
     runError = error;
     throw error;
   } finally {
-    await idempotencyStore.flush();
     await checkpointManager.finish(
       summary || {
         status: 'failed',

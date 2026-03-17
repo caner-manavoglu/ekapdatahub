@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "runMeta": {
+    "type": "mahkeme",
+    "fromDate": "2026/03/01",
+    "toDate": "2026/03/12"
+  },
+  "updatedAt": "2026-03-12T13:32:20.008Z",
+  "lastProcessed": {
+    "page": 2,
+    "row": 5,
+    "at": "2026-03-12T13:32:19.540Z"
+  },
+  "lastSuccess": null,
+  "totals": {
+    "downloaded": 0,
+    "failed": 0,
+    "retries": 0,
+    "duplicates": 10
+  },
+  "finishedAt": "2026-03-12T13:32:20.008Z",
+  "summary": {
+    "downloaded": 0,
+    "failed": 0,
+    "retries": 0,
+    "duplicates": 10,
+    "pageErrors": 0,
+    "workerFatalErrors": 0
+  }
+}

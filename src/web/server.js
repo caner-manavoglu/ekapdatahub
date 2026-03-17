@@ -189,6 +189,17 @@ const EKAP_V3_WORKER_COUNT_MAX = Math.max(
   Math.max(1, toInt(process.env.EKAP_V3_WORKER_COUNT_MAX, 8)),
 );
 const EKAP_V3_PREFLIGHT_TIMEOUT_MS = Math.max(1_000, toInt(process.env.EKAP_V3_PREFLIGHT_TIMEOUT_MS, 10_000));
+const EKAP_V3_PREFLIGHT_CHECK_ENDPOINT = toBool(process.env.EKAP_V3_PREFLIGHT_CHECK_ENDPOINT, true);
+const EKAP_V3_PREFLIGHT_STRICT = toBool(process.env.EKAP_V3_PREFLIGHT_STRICT, false);
+const EKAP_V3_PREFLIGHT_ENDPOINT_METHOD = ["HEAD", "GET"].includes(
+  String(process.env.EKAP_V3_PREFLIGHT_ENDPOINT_METHOD || "HEAD")
+    .trim()
+    .toUpperCase(),
+)
+  ? String(process.env.EKAP_V3_PREFLIGHT_ENDPOINT_METHOD || "HEAD")
+      .trim()
+      .toUpperCase()
+  : "HEAD";
 const EKAP_V3_PREFLIGHT_MIN_FREE_BYTES = Math.max(
   10 * 1024 * 1024,
   toInt(process.env.EKAP_V3_PREFLIGHT_MIN_FREE_BYTES, 200 * 1024 * 1024),
@@ -1213,28 +1224,49 @@ async function runEkapV3Preflight(options) {
     );
   }
 
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => {
-    controller.abort();
-  }, EKAP_V3_PREFLIGHT_TIMEOUT_MS);
-
   let endpointStatus = null;
-  try {
-    const response = await fetch(EKAP_V3_UI_URL, {
-      method: "GET",
-      signal: controller.signal,
-    });
-    endpointStatus = response.status;
-    if (response.status >= 500) {
-      throw new Error(`EKAP UI endpoint ulasilamaz durumda: HTTP ${response.status}`);
+  let endpointCheckMethod = EKAP_V3_PREFLIGHT_ENDPOINT_METHOD;
+  let endpointCheckOk = false;
+  let endpointCheckError = null;
+
+  if (EKAP_V3_PREFLIGHT_CHECK_ENDPOINT) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => {
+      controller.abort();
+    }, EKAP_V3_PREFLIGHT_TIMEOUT_MS);
+
+    try {
+      const request = async (method) =>
+        fetch(EKAP_V3_UI_URL, {
+          method,
+          signal: controller.signal,
+        });
+
+      let response = await request(endpointCheckMethod);
+      if (endpointCheckMethod === "HEAD" && response.status === 405) {
+        endpointCheckMethod = "GET";
+        response = await request("GET");
+      }
+
+      endpointStatus = response.status;
+      if (response.status >= 500) {
+        endpointCheckError = `EKAP UI endpoint ulasilamaz durumda: HTTP ${response.status}`;
+      } else {
+        endpointCheckOk = true;
+      }
+    } catch (error) {
+      if (error?.name === "AbortError") {
+        endpointCheckError = "Preflight endpoint kontrolu zaman asimina ugradi.";
+      } else {
+        endpointCheckError = `Preflight endpoint kontrolu basarisiz: ${error?.message || String(error)}`;
+      }
+    } finally {
+      clearTimeout(timeoutId);
     }
-  } catch (error) {
-    if (error?.name === "AbortError") {
-      throw new Error("Preflight endpoint kontrolu zaman asimina ugradi.");
-    }
-    throw new Error(`Preflight endpoint kontrolu basarisiz: ${error?.message || String(error)}`);
-  } finally {
-    clearTimeout(timeoutId);
+  }
+
+  if (endpointCheckError && EKAP_V3_PREFLIGHT_STRICT) {
+    throw new Error(endpointCheckError);
   }
 
   return {
@@ -1245,6 +1277,11 @@ async function runEkapV3Preflight(options) {
     minRequiredFreeBytes: EKAP_V3_PREFLIGHT_MIN_FREE_BYTES,
     endpoint: EKAP_V3_UI_URL,
     endpointStatus,
+    endpointCheckEnabled: EKAP_V3_PREFLIGHT_CHECK_ENDPOINT,
+    endpointCheckStrict: EKAP_V3_PREFLIGHT_STRICT,
+    endpointCheckMethod,
+    endpointCheckOk,
+    endpointCheckError,
     checkedAt: new Date().toISOString(),
   };
 }
@@ -2654,10 +2691,14 @@ const handleEkapV3Start = async (req, res, next) => {
     }
     if (preflight) {
       appendEkapV3Log(
-        "info",
-        `[PREFLIGHT] endpointStatus=${preflight.endpointStatus} freeBytes=${
+        preflight.endpointCheckOk ? "info" : "warn",
+        `[PREFLIGHT] endpointCheck=${preflight.endpointCheckEnabled ? "on" : "off"} strict=${
+          preflight.endpointCheckStrict ? "on" : "off"
+        } method=${preflight.endpointCheckMethod || "-"} endpointStatus=${preflight.endpointStatus} freeBytes=${
           preflight.freeBytes === null ? "n/a" : preflight.freeBytes
-        } minRequired=${preflight.minRequiredFreeBytes}`,
+        } minRequired=${preflight.minRequiredFreeBytes}${
+          preflight.endpointCheckError ? ` error=${preflight.endpointCheckError}` : ""
+        }`,
       );
     }
     appendEkapV3Log("info", `[RUN] Baslatildi: ${scriptName} ${args.slice(1).join(" ")}`);
@@ -2937,6 +2978,72 @@ app.post("/api/ekapv3/stop", (req, res) => {
       stopRequested: true,
     },
   });
+});
+
+app.post("/api/ekapv3/logs/clear", async (req, res, next) => {
+  try {
+    const payload = req.body && typeof req.body === "object" ? req.body : {};
+    const confirmation = normalizeConfirmation(payload.confirmation);
+    if (confirmation !== DELETE_CONFIRMATION_TEXT) {
+      res.status(400).json({
+        error: `"${DELETE_CONFIRMATION_TEXT}" yazmadan temizleme işlemi yapılamaz.`,
+      });
+      return;
+    }
+
+    const clearedCount = Array.isArray(ekapV3State.logs) ? ekapV3State.logs.length : 0;
+    ekapV3State.logs = [];
+
+    await writeAuditLog(req, "ekapv3.logs.clear", {
+      clearedCount,
+      running: Boolean(ekapV3State.running),
+      runId: ekapV3State.currentRun?.runId || null,
+    });
+
+    res.json({
+      data: {
+        clearedCount,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/ekapv3/history/clear", async (req, res, next) => {
+  try {
+    if (ekapV3State.running) {
+      res.status(409).json({ error: "EKAP v3 çalışırken indirme geçmişi temizlenemez." });
+      return;
+    }
+
+    const payload = req.body && typeof req.body === "object" ? req.body : {};
+    const confirmation = normalizeConfirmation(payload.confirmation);
+    if (confirmation !== DELETE_CONFIRMATION_TEXT) {
+      res.status(400).json({
+        error: `"${DELETE_CONFIRMATION_TEXT}" yazmadan temizleme işlemi yapılamaz.`,
+      });
+      return;
+    }
+
+    let deletedCount = 0;
+    if (ekapV3LogCollection) {
+      const result = await ekapV3LogCollection.deleteMany({});
+      deletedCount = Number(result?.deletedCount || 0);
+    }
+
+    await writeAuditLog(req, "ekapv3.history.clear", {
+      deletedCount,
+    });
+
+    res.json({
+      data: {
+        deletedCount,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.get("/api/ekapv3/history", async (req, res, next) => {
@@ -3666,6 +3773,7 @@ module.exports = {
     formatEkapV3CountDateBoundary,
     buildEkapV3CountPayload,
     parseEkapV3CountResponse,
+    runEkapV3Preflight,
     buildOpsDashboardData,
     getRecentOpsAlertEvents,
     normalizeOpsBenchmarkPayload,

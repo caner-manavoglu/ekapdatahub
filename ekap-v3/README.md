@@ -67,6 +67,8 @@ Kullanılabilir parametreler:
 - `--contextResetAfterPages=`: Tek worker modunda kaç sayfa sonra context reset (varsayılan `20`)
 - `--minDownloadBytes=`: İndirilen dosya minimum byte kontrolü (varsayılan `1024`)
 - `--enforcePdfHeader=`: `%PDF` header doğrulaması (`true/false`, varsayılan `true`)
+- `--apiFirstDownload=`: `true/false`, PDF indirmeyi once API request ile dener (varsayılan `true`)
+- `--apiFirstStrict=`: `true/false`, API-first basarisiz olursa UI fallback yerine hataya duser (varsayılan `false`)
 - `--checkpoint=`: Checkpoint mekanizmasını aç/kapat (`true/false`, varsayılan `true`)
 - `--checkpointPath=`: Checkpoint dosya yolu
 - `--resetCheckpoint=`: Çalışma başında checkpoint sıfırlansın mı (`true/false`, varsayılan `false`)
@@ -80,8 +82,15 @@ Notlar:
 - İndirme klasörleri:
 - `mahkeme`: `indirilenler/mahkeme`
 - `uyusmazlik`: `indirilenler/uyusmazlik`
-- Idempotent manifest dosyası: `indirilenler/<type>/.idempotency-manifest.json`
 - Checkpoint dosyası: `checkpoints/<type>-<from>-<to>.json`
+- Duplicate kontrolü kapalıdır; aynı satırlar tekrar çalıştırmalarda yeniden indirilir.
+
+API-first indirme notu:
+
+- Script download butonunun POST/GET bilgisini popup sayfasindan cikarip dogrudan request ile PDF indirir.
+- API-first basarisiz olursa (strict kapaliysa) UI click download fallback calisir.
+- Bu model popup/download event kirilganligini ve toplam indirme suresini azaltir.
+- Log satirinda `transport=api-first` veya `transport=ui-download` bilgisi gorunur.
 
 ## Timeout Retry Davranışı
 

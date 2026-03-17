@@ -175,6 +175,11 @@ Not: Bu migration komutu geçiş dönemi içindir ve 30 Eylül 2026 sonrası kal
 - `OPS_ALERT_SCRAPE_DETAIL_P95_MS`: Scrape detay p95 alarm eşiği (ms)
 - `OPS_ALERT_SCRAPE_QUEUE_P95`: Scrape queue depth p95 alarm eşiği
 - `OPS_ALERT_STALLED_RUN_MINUTES`: İndirme run tıkanma alarm eşiği (dakika)
+- `EKAP_V3_PREFLIGHT_CHECK_ENDPOINT`: `true` ise EKAP UI endpoint kontrolü yapılır
+- `EKAP_V3_PREFLIGHT_STRICT`: `true` ise endpoint timeout/network hatasında start isteği bloklanır
+- `EKAP_V3_PREFLIGHT_ENDPOINT_METHOD`: Endpoint health check HTTP metodu (`HEAD`/`GET`)
+- `API_FIRST_DOWNLOAD`: EKAP v3 Playwright indirmede PDF'i once API request ile dener (`true/false`)
+- `API_FIRST_STRICT`: API-first basarisiz olursa UI fallback yerine hataya duser (`true/false`)
 - `OPS_BENCHMARK_COOKIE`: Benchmark scripti için hazır session cookie (opsiyonel)
 - `OPS_BENCHMARK_USERNAME`: Benchmark scripti login kullanıcı adı (opsiyonel)
 - `OPS_BENCHMARK_PASSWORD`: Benchmark scripti login şifresi (opsiyonel)

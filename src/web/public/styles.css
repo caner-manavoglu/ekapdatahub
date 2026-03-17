@@ -819,6 +819,14 @@ body {
   flex-wrap: wrap;
 }
 
+.v3-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .v3-pagination {
   display: flex;
   align-items: center;

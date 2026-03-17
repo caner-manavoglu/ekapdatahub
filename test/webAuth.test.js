@@ -320,6 +320,24 @@ test("normalizeOpsBenchmarkPayload should sanitize benchmark data", () => {
   assert.equal(payload?.endpoints?.[0]?.id, "opsDashboard");
 });
 
+test("runEkapV3Preflight should not throw on endpoint timeout when strict mode is disabled", async () => {
+  const originalFetch = global.fetch;
+  global.fetch = async () => {
+    const error = new Error("timeout");
+    error.name = "AbortError";
+    throw error;
+  };
+
+  try {
+    const result = await _internal.runEkapV3Preflight({ type: "mahkeme" });
+    assert.equal(result?.ok, true);
+    assert.equal(result?.endpointCheckOk, false);
+    assert.match(String(result?.endpointCheckError || ""), /zaman asimina ugradi/i);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
 test("requireApiAuth should enforce role and csrf checks", () => {
   _internal.authSessions.clear();
 
