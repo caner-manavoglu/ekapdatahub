@@ -3,8 +3,18 @@ const TENDER_PRIMARY_SORT_INDEX = {
   createdAt: -1,
   _id: -1,
 };
+const TENDER_SYNC_INDEX = {
+  "sync.lastSyncedAt": -1,
+  updatedAt: -1,
+};
+const TENDER_NORMALIZED_KEY_INDEX = {
+  "sync.normalizedUniqueKey": 1,
+  updatedAt: -1,
+};
 
 const TENDER_PRIMARY_SORT_INDEX_NAME = "updatedAt_-1_createdAt_-1__id_-1";
+const TENDER_SYNC_INDEX_NAME = "sync.lastSyncedAt_-1_updatedAt_-1";
+const TENDER_NORMALIZED_KEY_INDEX_NAME = "sync.normalizedUniqueKey_1_updatedAt_-1";
 
 async function dropIndexIfExists(collection, indexName) {
   try {
@@ -22,6 +32,12 @@ async function ensureTenderCollectionIndexes(collection) {
   await collection.createIndex({ ikn: 1 }, { name: "ikn_1" });
   await collection.createIndex(TENDER_PRIMARY_SORT_INDEX, {
     name: TENDER_PRIMARY_SORT_INDEX_NAME,
+  });
+  await collection.createIndex(TENDER_SYNC_INDEX, {
+    name: TENDER_SYNC_INDEX_NAME,
+  });
+  await collection.createIndex(TENDER_NORMALIZED_KEY_INDEX, {
+    name: TENDER_NORMALIZED_KEY_INDEX_NAME,
   });
 
   // Legacy/redundant indexes from previous versions.
@@ -42,10 +58,29 @@ async function ensureAuditLogIndexes(collection) {
   await collection.createIndex({ "actor.username": 1, createdAt: -1 }, { name: "actor_username_1_createdAt_-1" });
 }
 
+async function ensureOpsAlertIndexes(collection) {
+  await collection.createIndex({ createdAt: -1 }, { name: "createdAt_-1" });
+  await collection.createIndex({ status: 1, createdAt: -1 }, { name: "status_1_createdAt_-1" });
+  await collection.createIndex({ fingerprint: 1, createdAt: -1 }, { name: "fingerprint_1_createdAt_-1" });
+}
+
+async function ensureOpsBenchmarkIndexes(collection) {
+  await collection.createIndex({ createdAt: -1 }, { name: "createdAt_-1" });
+  await collection.createIndex({ "summary.regressionCount": -1, createdAt: -1 }, {
+    name: "summary_regressionCount_-1_createdAt_-1",
+  });
+}
+
 module.exports = {
   ensureTenderCollectionIndexes,
   ensureEkapV3LogIndexes,
   ensureAuditLogIndexes,
+  ensureOpsAlertIndexes,
+  ensureOpsBenchmarkIndexes,
   TENDER_PRIMARY_SORT_INDEX,
   TENDER_PRIMARY_SORT_INDEX_NAME,
+  TENDER_SYNC_INDEX,
+  TENDER_SYNC_INDEX_NAME,
+  TENDER_NORMALIZED_KEY_INDEX,
+  TENDER_NORMALIZED_KEY_INDEX_NAME,
 };

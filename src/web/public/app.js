@@ -376,8 +376,10 @@ async function syncScrapeStatus() {
     if (data.lastResult) {
       const r = data.lastResult;
       const doneLabel = r.stopped ? "Durduruldu" : "Tamamlandı";
+      const skipped = Number.isFinite(r.skippedUnchanged) ? r.skippedUnchanged : 0;
+      const skippedText = skipped > 0 ? `, ${skipped} atlandı` : "";
       setScrapeStatus(
-        `${doneLabel} (${r.saved ?? 0} kayıt, ${r.failed ?? 0} hata)`,
+        `${doneLabel} (${r.saved ?? 0} kayıt, ${r.failed ?? 0} hata${skippedText})`,
         r.stopped ? "neutral" : "success",
       );
       return data;

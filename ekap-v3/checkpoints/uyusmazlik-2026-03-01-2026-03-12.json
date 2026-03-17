@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "runMeta": {
+    "type": "uyusmazlik",
+    "fromDate": "2026/03/01",
+    "toDate": "2026/03/12"
+  },
+  "updatedAt": "2026-03-12T13:07:55.343Z",
+  "lastProcessed": null,
+  "lastSuccess": null,
+  "totals": {
+    "downloaded": 0,
+    "failed": 0,
+    "retries": 0,
+    "duplicates": 0
+  },
+  "finishedAt": "2026-03-12T13:07:55.343Z",
+  "summary": {
+    "status": "failed",
+    "error": "page.waitForFunction: TypeError: Cannot read properties of undefined (reading 'some')\n    at hasAnyVisible (eval at predicate (eval at evaluate (:290:30)), <anonymous>:3:19)\n    at eval (eval at predicate (eval at evaluate (:290:30)), <anonymous>:8:11)\n    at predicate (eval at evaluate (:290:30), <anonymous>:7:23)\n    at next (eval at evaluate (:290:30), <anonymous>:29:29)\n    at eval (eval at evaluate (:290:30), <anonymous>:42:9)\n    at UtilityScript.evaluate (<anonymous>:292:16)\n    at UtilityScript.<anonymous> (<anonymous>:1:44)"
+  }
+}

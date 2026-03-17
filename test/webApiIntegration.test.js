@@ -78,6 +78,15 @@ test.afterEach(() => {
   _internal.scrapeState.currentRunOptions = null;
   _internal.scrapeState.lastResult = null;
   _internal.scrapeState.lastError = null;
+  _internal.ekapV3State.running = false;
+  _internal.ekapV3State.stopRequested = false;
+  _internal.ekapV3State.currentRun = null;
+  _internal.ekapV3State.lastRun = null;
+  _internal.ekapV3State.lastError = null;
+  _internal.ekapV3State.logs = [];
+  _internal.ekapV3State.childProcess = null;
+  _internal.opsState.activeAlertFingerprints = new Set();
+  _internal.opsState.lastEvaluatedAt = null;
 });
 
 test("POST /api/scrape/run should return 409 when already running", async () => {
@@ -211,6 +220,150 @@ test("POST /api/ekapv3/files/open-dir and delete should work with auth", async (
   assert.ok(Number.isFinite(deletePayload?.data?.missingCount));
   assert.equal(auditEvents.length, 1);
   assert.equal(auditEvents[0]?.action, "ekapv3.files.delete.selected");
+});
+
+test("POST /api/ekapv3/download should reuse start flow", async () => {
+  const auth = await loginAsAdmin();
+  _internal.ekapV3State.running = true;
+
+  const response = await fetch(`${baseUrl}/api/ekapv3/download`, {
+    method: "POST",
+    headers: {
+      Cookie: auth.cookie,
+      "Content-Type": "application/json",
+      "x-csrf-token": auth.csrfToken,
+    },
+    body: JSON.stringify({
+      type: "mahkeme",
+      fromDate: "2026-03-01",
+      toDate: "2026-03-02",
+      startPage: 1,
+      endPage: 1,
+      allPages: false,
+      browserMode: "headless",
+    }),
+  });
+  const payload = await response.json();
+
+  assert.equal(response.status, 409);
+  assert.match(String(payload?.error || ""), /zaten çalışıyor/i);
+});
+
+test("GET /api/ekapv3/history should include pagination meta", async () => {
+  const auth = await loginAsAdmin();
+
+  const response = await fetch(`${baseUrl}/api/ekapv3/history?page=2&limit=10`, {
+    headers: {
+      Cookie: auth.cookie,
+    },
+  });
+  const payload = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.equal(payload?.meta?.total, 0);
+  assert.equal(payload?.meta?.page, 1);
+  assert.equal(payload?.meta?.limit, 10);
+  assert.equal(payload?.meta?.totalPages, 1);
+});
+
+test("GET /api/ops/dashboard should return kpis and alerts payload", async () => {
+  const auth = await loginAsAdmin();
+  const startedAt = new Date(Date.now() - 40 * 60 * 1000).toISOString();
+  const logAt = new Date(Date.now() - 35 * 60 * 1000).toISOString();
+
+  _internal.ekapV3State.running = true;
+  _internal.ekapV3State.currentRun = {
+    runId: "ops-run-1",
+    type: "mahkeme",
+    startedAt,
+    status: "running",
+  };
+  _internal.ekapV3State.logs = [
+    {
+      level: "info",
+      timestamp: logAt,
+      message: "stale-log",
+    },
+  ];
+  _internal.scrapeState.lastResult = {
+    processed: 50,
+    failed: 5,
+    observability: {
+      retries: 4,
+      listLatencyMs: {
+        p95: 8_500,
+      },
+      detailLatencyMs: {
+        p95: 16_000,
+      },
+      queueDepth: {
+        p95: 70,
+      },
+    },
+  };
+
+  const response = await fetch(`${baseUrl}/api/ops/dashboard`, {
+    headers: {
+      Cookie: auth.cookie,
+    },
+  });
+  const payload = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.ok(Array.isArray(payload?.data?.kpis));
+  assert.ok(payload.data.kpis.length >= 3);
+  assert.ok(Array.isArray(payload?.data?.alerts));
+  assert.ok(payload.data.alerts.length >= 1);
+  assert.ok(payload?.data?.downloads?.running);
+  assert.equal(payload?.data?.scrape?.hasResult, true);
+});
+
+test("GET /api/ops/alerts should return active and recent lists", async () => {
+  const auth = await loginAsAdmin();
+
+  const response = await fetch(`${baseUrl}/api/ops/alerts?limit=5`, {
+    headers: {
+      Cookie: auth.cookie,
+    },
+  });
+  const payload = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.ok(Array.isArray(payload?.data?.active));
+  assert.ok(Array.isArray(payload?.data?.recent));
+  assert.ok(Number.isFinite(Number(payload?.data?.activeCount)));
+});
+
+test("POST /api/ops/benchmark should accept benchmark payload", async () => {
+  const auth = await loginAsAdmin();
+  const response = await fetch(`${baseUrl}/api/ops/benchmark`, {
+    method: "POST",
+    headers: {
+      Cookie: auth.cookie,
+      "Content-Type": "application/json",
+      "x-csrf-token": auth.csrfToken,
+    },
+    body: JSON.stringify({
+      source: "integration-test",
+      sampleCount: 3,
+      maxRegressionPct: 20,
+      endpoints: [
+        {
+          id: "opsDashboard",
+          path: "/api/ops/dashboard",
+          p95Ms: 122.5,
+          failures: 0,
+        },
+      ],
+      regressions: [],
+    }),
+  });
+  const payload = await response.json();
+
+  assert.equal(response.status, 202);
+  assert.equal(payload?.data?.saved, true);
+  assert.match(String(payload?.data?.benchmarkId || ""), /^ops-bench-/);
+  assert.equal(payload?.data?.summary?.endpointCount, 1);
 });
 
 test("unauthenticated html routes should redirect to login with next target", async () => {

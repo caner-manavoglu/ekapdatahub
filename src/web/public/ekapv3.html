@@ -29,6 +29,31 @@
     </header>
 
     <main class="layout layout--single">
+      <section class="panel panel--detail v3-panel v3-panel--ops">
+        <div class="panel__head">
+          <h2>Operasyon Dashboard</h2>
+          <span id="v3OpsMeta" class="meta-pill">Yükleniyor</span>
+        </div>
+        <div class="v3-body">
+          <div id="v3OpsKpis" class="ops-kpi-grid">
+            <article class="ops-kpi-card">
+              <p class="ops-kpi-card__title">KPI</p>
+              <p class="ops-kpi-card__value">-</p>
+              <p class="ops-kpi-card__hint">Veri bekleniyor</p>
+            </article>
+          </div>
+          <div class="ops-alerts">
+            <div class="ops-alerts__head">
+              <h3>Aktif Alarmlar</h3>
+              <span id="v3OpsAlertsMeta" class="meta-pill">0 alarm</span>
+            </div>
+            <ul id="v3OpsAlertsList" class="ops-alert-list">
+              <li class="ops-alert-item ops-alert-item--ok">Aktif alarm yok.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
       <section class="panel panel--detail v3-panel">
         <div class="panel__head">
           <h2>İndirme Parametreleri</h2>
@@ -70,12 +95,22 @@
                 <span>Tüm sayfaları indir</span>
               </label>
 
+              <label class="v3-field v3-field--check" for="resumeFromLast">
+                <input id="resumeFromLast" type="checkbox" />
+                <span>Kaldığı yerden devam et</span>
+              </label>
+
               <label class="v3-field">
                 <span>Tarayıcı Modu</span>
                 <select id="browserMode">
                   <option value="headless">Gizli (headless)</option>
                   <option value="visible">Görünür</option>
                 </select>
+              </label>
+
+              <label class="v3-field">
+                <span>Worker Sayısı</span>
+                <input id="workerCount" type="number" min="1" max="8" step="1" value="1" />
               </label>
             </div>
 
@@ -90,17 +125,40 @@
       <section class="panel panel--detail v3-panel">
         <div class="panel__head">
           <h2>Canlı Log</h2>
-          <span class="meta-pill">Son 500 satır</span>
+          <div class="v3-head-actions">
+            <span id="v3LogMeta" class="meta-pill">0 kayıt</span>
+            <button type="button" id="v3ClearLogsButton" class="btn btn--ghost v3-mini-btn">Temizle</button>
+          </div>
         </div>
         <div class="v3-body">
           <pre id="v3LiveLog" class="text-block">Henüz log yok.</pre>
+          <div class="v3-pagination" aria-label="Canlı log sayfalama">
+            <button type="button" id="v3LogFirstButton" class="btn btn--ghost v3-mini-btn">İlk</button>
+            <button type="button" id="v3LogPrevButton" class="btn btn--ghost v3-mini-btn">Önceki</button>
+            <span id="v3LogPageInfo" class="v3-pagination__info">Sayfa 1 / 1</span>
+            <button type="button" id="v3LogNextButton" class="btn btn--ghost v3-mini-btn">Sonraki</button>
+            <button type="button" id="v3LogLastButton" class="btn btn--ghost v3-mini-btn">Son</button>
+            <input
+              id="v3LogJumpInput"
+              class="v3-pagination__jump-input"
+              type="number"
+              min="1"
+              step="1"
+              value="1"
+              aria-label="Canlı log sayfasına git"
+            />
+            <button type="button" id="v3LogJumpButton" class="btn btn--ghost v3-mini-btn">Git</button>
+          </div>
         </div>
       </section>
 
       <section class="panel panel--detail v3-panel">
         <div class="panel__head">
           <h2>İndirme Geçmişi</h2>
-          <span id="v3HistoryMeta" class="meta-pill">0 kayıt</span>
+          <div class="v3-head-actions">
+            <span id="v3HistoryMeta" class="meta-pill">0 kayıt</span>
+            <button type="button" id="v3ClearHistoryButton" class="btn btn--ghost v3-mini-btn">Temizle</button>
+          </div>
         </div>
         <div class="downloads-table-wrap">
           <table class="downloads-table">
@@ -117,6 +175,23 @@
             </thead>
             <tbody id="v3HistoryBody"></tbody>
           </table>
+        </div>
+        <div class="v3-pagination v3-pagination--table" aria-label="İndirme geçmişi sayfalama">
+          <button type="button" id="v3HistoryFirstButton" class="btn btn--ghost v3-mini-btn">İlk</button>
+          <button type="button" id="v3HistoryPrevButton" class="btn btn--ghost v3-mini-btn">Önceki</button>
+          <span id="v3HistoryPageInfo" class="v3-pagination__info">Sayfa 1 / 1</span>
+          <button type="button" id="v3HistoryNextButton" class="btn btn--ghost v3-mini-btn">Sonraki</button>
+          <button type="button" id="v3HistoryLastButton" class="btn btn--ghost v3-mini-btn">Son</button>
+          <input
+            id="v3HistoryJumpInput"
+            class="v3-pagination__jump-input"
+            type="number"
+            min="1"
+            step="1"
+            value="1"
+            aria-label="İndirme geçmişi sayfasına git"
+          />
+          <button type="button" id="v3HistoryJumpButton" class="btn btn--ghost v3-mini-btn">Git</button>
         </div>
       </section>
 
@@ -154,11 +229,14 @@
             <thead>
               <tr>
                 <th>
-                  <input
-                    type="checkbox"
-                    id="v3SelectAllFilesCheckbox"
-                    aria-label="Tüm dosyaları seç"
-                  />
+                  <label class="v3-inline-check" for="v3SelectAllFilesCheckbox">
+                    <input
+                      type="checkbox"
+                      id="v3SelectAllFilesCheckbox"
+                      aria-label="Bu sayfadakileri seç"
+                    />
+                    <span>Bu sayfa</span>
+                  </label>
                 </th>
                 <th>Tarih</th>
                 <th>Tür</th>
@@ -169,6 +247,23 @@
             </thead>
             <tbody id="v3FilesBody"></tbody>
           </table>
+        </div>
+        <div class="v3-pagination v3-pagination--table" aria-label="İndirilen dosyalar sayfalama">
+          <button type="button" id="v3FilesFirstButton" class="btn btn--ghost v3-mini-btn">İlk</button>
+          <button type="button" id="v3FilesPrevButton" class="btn btn--ghost v3-mini-btn">Önceki</button>
+          <span id="v3FilesPageInfo" class="v3-pagination__info">Sayfa 1 / 1</span>
+          <button type="button" id="v3FilesNextButton" class="btn btn--ghost v3-mini-btn">Sonraki</button>
+          <button type="button" id="v3FilesLastButton" class="btn btn--ghost v3-mini-btn">Son</button>
+          <input
+            id="v3FilesJumpInput"
+            class="v3-pagination__jump-input"
+            type="number"
+            min="1"
+            step="1"
+            value="1"
+            aria-label="İndirilen dosyalar sayfasına git"
+          />
+          <button type="button" id="v3FilesJumpButton" class="btn btn--ghost v3-mini-btn">Git</button>
         </div>
       </section>
     </main>

@@ -1,10 +1,12 @@
 const DELETE_CONFIRMATION_TEXT = "onaylıyorum";
+const PAGE_LIMIT = 10;
 
 const state = {
   running: false,
   stopRequested: false,
   currentRun: null,
   lastRun: null,
+  opsDashboard: null,
   logs: [],
   history: [],
   files: [],
@@ -12,15 +14,33 @@ const state = {
   pendingDeleteAction: null,
   confirmBusy: false,
   lastFocusedElement: null,
+  logPage: 1,
+  logLimit: PAGE_LIMIT,
+  historyPage: 1,
+  historyLimit: PAGE_LIMIT,
+  historyTotal: 0,
+  historyTotalPages: 1,
+  filesPage: 1,
+  filesLimit: PAGE_LIMIT,
+  filesTotal: 0,
+  filesTotalPages: 1,
 };
 let statusPollInFlight = false;
 let filesPollInFlight = false;
+let historyPollInFlight = false;
 let statusPollFailureCount = 0;
 let filesPollFailureCount = 0;
+let historyPollFailureCount = 0;
+let opsPollInFlight = false;
+let opsPollFailureCount = 0;
 
 const el = {
   status: document.getElementById("v3Status"),
   runMeta: document.getElementById("v3RunMeta"),
+  opsMeta: document.getElementById("v3OpsMeta"),
+  opsKpis: document.getElementById("v3OpsKpis"),
+  opsAlertsMeta: document.getElementById("v3OpsAlertsMeta"),
+  opsAlertsList: document.getElementById("v3OpsAlertsList"),
   form: document.getElementById("v3Form"),
   openDownloadsButton: document.getElementById("v3OpenDownloadsButton"),
   jobType: document.getElementById("jobType"),
@@ -29,14 +49,40 @@ const el = {
   startPage: document.getElementById("startPage"),
   endPage: document.getElementById("endPage"),
   allPages: document.getElementById("allPages"),
+  resumeFromLast: document.getElementById("resumeFromLast"),
   browserMode: document.getElementById("browserMode"),
+  workerCount: document.getElementById("workerCount"),
   startButton: document.getElementById("startButton"),
   stopButton: document.getElementById("stopButton"),
+  logMeta: document.getElementById("v3LogMeta"),
+  clearLogsButton: document.getElementById("v3ClearLogsButton"),
   liveLog: document.getElementById("v3LiveLog"),
+  logFirstButton: document.getElementById("v3LogFirstButton"),
+  logPrevButton: document.getElementById("v3LogPrevButton"),
+  logPageInfo: document.getElementById("v3LogPageInfo"),
+  logNextButton: document.getElementById("v3LogNextButton"),
+  logLastButton: document.getElementById("v3LogLastButton"),
+  logJumpInput: document.getElementById("v3LogJumpInput"),
+  logJumpButton: document.getElementById("v3LogJumpButton"),
   historyMeta: document.getElementById("v3HistoryMeta"),
+  clearHistoryButton: document.getElementById("v3ClearHistoryButton"),
   historyBody: document.getElementById("v3HistoryBody"),
+  historyFirstButton: document.getElementById("v3HistoryFirstButton"),
+  historyPrevButton: document.getElementById("v3HistoryPrevButton"),
+  historyPageInfo: document.getElementById("v3HistoryPageInfo"),
+  historyNextButton: document.getElementById("v3HistoryNextButton"),
+  historyLastButton: document.getElementById("v3HistoryLastButton"),
+  historyJumpInput: document.getElementById("v3HistoryJumpInput"),
+  historyJumpButton: document.getElementById("v3HistoryJumpButton"),
   filesMeta: document.getElementById("v3FilesMeta"),
   filesBody: document.getElementById("v3FilesBody"),
+  filesFirstButton: document.getElementById("v3FilesFirstButton"),
+  filesPrevButton: document.getElementById("v3FilesPrevButton"),
+  filesPageInfo: document.getElementById("v3FilesPageInfo"),
+  filesNextButton: document.getElementById("v3FilesNextButton"),
+  filesLastButton: document.getElementById("v3FilesLastButton"),
+  filesJumpInput: document.getElementById("v3FilesJumpInput"),
+  filesJumpButton: document.getElementById("v3FilesJumpButton"),
   filesTypeFilter: document.getElementById("v3FilesTypeFilter"),
   filesRefreshButton: document.getElementById("v3FilesRefreshButton"),
   selectAllFilesCheckbox: document.getElementById("v3SelectAllFilesCheckbox"),
@@ -100,6 +146,12 @@ function parsePositiveInt(value, fallback) {
   return parsed;
 }
 
+function clampPage(value, totalPages) {
+  const page = parsePositiveInt(value, 1);
+  const safeTotal = Math.max(1, parsePositiveInt(totalPages, 1));
+  return Math.min(page, safeTotal);
+}
+
 function formatPageRange(runLike) {
   const allPages = Boolean(runLike?.allPages);
   if (allPages) {
@@ -107,7 +159,15 @@ function formatPageRange(runLike) {
   }
   const startPage = runLike?.startPage ?? "-";
   const endPage = runLike?.endPage ?? "-";
+  const startRow = Number(runLike?.startRow || runLike?.selectedPages?.startRow || 1);
+  if (startRow > 1) {
+    return `${startPage}-${endPage} (satır:${startRow}+)`;
+  }
   return `${startPage}-${endPage}`;
+}
+
+function getLogTotalPages() {
+  return Math.max(1, Math.ceil((state.logs.length || 0) / state.logLimit));
 }
 
 function applyAllPagesUi() {
@@ -240,8 +300,10 @@ function readFormPayload() {
   const fromDate = String(el.fromDate.value || "").trim();
   const toDate = String(el.toDate.value || "").trim();
   const allPages = Boolean(el.allPages.checked);
+  const resumeFromLast = Boolean(el.resumeFromLast?.checked);
   const startPage = allPages ? 1 : parsePositiveInt(el.startPage.value, 1);
   const endPage = allPages ? null : parsePositiveInt(el.endPage.value, startPage);
+  const workerCount = Math.min(8, Math.max(1, parsePositiveInt(el.workerCount?.value, 1)));
 
   if (!fromDate || !toDate) {
     throw new Error("Başlangıç ve bitiş tarihi zorunlu.");
@@ -257,6 +319,8 @@ function readFormPayload() {
     startPage,
     endPage,
     allPages,
+    resumeFromLast,
+    workerCount,
     browserMode: el.browserMode.value === "visible" ? "visible" : "headless",
   };
 }
@@ -264,12 +328,35 @@ function readFormPayload() {
 function renderStatus() {
   el.startButton.disabled = state.running;
   el.stopButton.disabled = !state.running;
+  el.clearLogsButton.disabled = state.logs.length === 0;
+  el.clearHistoryButton.disabled = state.running || state.historyTotal === 0;
 
   if (state.running) {
     const run = state.currentRun;
     setStatus("Çalışıyor", "running");
     if (run) {
-      el.runMeta.textContent = `${run.type} | ${run.fromDate} -> ${run.toDate} | ${formatPageRange(run)}`;
+      const downloadedCount = Number(run.downloadedCount || 0);
+      const failedCount = Number(run.failedCount || 0);
+      const retryCount = Number(run.retryCount || 0);
+      const duplicateCount = Number(run.duplicateCount || 0);
+      const processedCount = downloadedCount + failedCount;
+      const totalTargetCountRaw = Number(run.totalTargetCount || 0);
+      const hasKnownTotal = Number.isFinite(totalTargetCountRaw) && totalTargetCountRaw > 0;
+      const totalTargetCountLabel = hasKnownTotal
+        ? `${totalTargetCountRaw}${run.totalTargetCountCapped ? "+" : ""}`
+        : "bilinmiyor";
+      const downloadedProgress = hasKnownTotal
+        ? `${downloadedCount}/${totalTargetCountLabel}`
+        : String(downloadedCount);
+      const runId = String(run.runId || "-");
+      const startedAt = formatDate(run.startedAt);
+      const workerInfo = ` | Worker: ${Number(run.workerCount || 1)}`;
+      const resumeInfo =
+        run.resumeApplied && Number(run.resumeFromPage || 0) > 0
+          ? ` | Devam: s.${run.resumeFromPage}`
+          : "";
+      const progressInfo = ` | İndirilen: ${downloadedProgress} | İşlenen: ${processedCount} | Hata: ${failedCount} | Retry: ${retryCount} | Dup: ${duplicateCount} | Toplam: ${totalTargetCountLabel}`;
+      el.runMeta.textContent = `run:${runId} | ${startedAt} | ${run.type} | ${run.fromDate} -> ${run.toDate} | ${formatPageRange(run)}${workerInfo}${resumeInfo}${progressInfo}`;
     } else {
       el.runMeta.textContent = "Çalışıyor";
     }
@@ -285,7 +372,14 @@ function renderStatus() {
     } else {
       setStatus("Hata", "error");
     }
-    el.runMeta.textContent = `${r.type} | ${r.fromDate} -> ${r.toDate} | ${formatPageRange(r)}`;
+    const resumeInfo =
+      r.resumeApplied && Number(r.resumeFromPage || 0) > 0
+        ? ` | Devam: s.${r.resumeFromPage}`
+        : "";
+    const runId = String(r.runId || "-");
+    const startedAt = formatDate(r.startedAt);
+    const workerInfo = ` | Worker: ${Number(r.workerCount || 1)}`;
+    el.runMeta.textContent = `run:${runId} | ${startedAt} | ${r.type} | ${r.fromDate} -> ${r.toDate} | ${formatPageRange(r)}${workerInfo}${resumeInfo}`;
     return;
   }
 
@@ -293,24 +387,132 @@ function renderStatus() {
   el.runMeta.textContent = "Çalışma yok";
 }
 
+function formatMetricValue(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "-";
+  return new Intl.NumberFormat("tr-TR", {
+    maximumFractionDigits: 2,
+  }).format(number);
+}
+
+function renderOpsDashboard() {
+  const dashboard = state.opsDashboard;
+  if (!dashboard) {
+    el.opsMeta.textContent = "Veri yok";
+    el.opsKpis.innerHTML = `<article class="ops-kpi-card">
+  <p class="ops-kpi-card__title">KPI</p>
+  <p class="ops-kpi-card__value">-</p>
+  <p class="ops-kpi-card__hint">Operasyon verisi bekleniyor</p>
+</article>`;
+    el.opsAlertsMeta.textContent = "0 alarm";
+    el.opsAlertsList.innerHTML = '<li class="ops-alert-item ops-alert-item--ok">Aktif alarm yok.</li>';
+    return;
+  }
+
+  const generatedAt = formatDate(dashboard.generatedAt);
+  const windowHours = Number(dashboard?.window?.hours || 0);
+  el.opsMeta.textContent = `${windowHours || "-"} saat | ${generatedAt}`;
+
+  const kpis = Array.isArray(dashboard.kpis) ? dashboard.kpis : [];
+  if (!kpis.length) {
+    el.opsKpis.innerHTML = `<article class="ops-kpi-card">
+  <p class="ops-kpi-card__title">KPI</p>
+  <p class="ops-kpi-card__value">-</p>
+  <p class="ops-kpi-card__hint">Veri yok</p>
+</article>`;
+  } else {
+    el.opsKpis.innerHTML = kpis
+      .map((kpi) => {
+        const tone = String(kpi?.tone || "neutral");
+        const title = escapeHtml(kpi?.title || "-");
+        const value = escapeHtml(String(kpi?.value ?? "-"));
+        const hint = escapeHtml(kpi?.hint || "-");
+        return `<article class="ops-kpi-card ops-kpi-card--${tone}">
+  <p class="ops-kpi-card__title">${title}</p>
+  <p class="ops-kpi-card__value">${value}</p>
+  <p class="ops-kpi-card__hint">${hint}</p>
+</article>`;
+      })
+      .join("");
+  }
+
+  const alerts = Array.isArray(dashboard.alerts) ? dashboard.alerts : [];
+  el.opsAlertsMeta.textContent = `${alerts.length} alarm`;
+  if (!alerts.length) {
+    el.opsAlertsList.innerHTML = '<li class="ops-alert-item ops-alert-item--ok">Aktif alarm yok.</li>';
+    return;
+  }
+
+  el.opsAlertsList.innerHTML = alerts
+    .map((alert) => {
+      const severityRaw = String(alert?.severity || "warning").toLowerCase();
+      const severity = ["critical", "warning", "info", "ok"].includes(severityRaw)
+        ? severityRaw
+        : "warning";
+      const metric = escapeHtml(alert?.metric || "-");
+      const value = formatMetricValue(alert?.value);
+      const threshold = formatMetricValue(alert?.threshold);
+      const message = escapeHtml(alert?.message || "");
+      return `<li class="ops-alert-item ops-alert-item--${severity}">
+  <strong>${escapeHtml(String(alert?.source || "ops"))}</strong>
+  <span>${message}</span>
+  <span class="ops-alert-item__meta">${metric}: ${value} | esik: ${threshold}</span>
+</li>`;
+    })
+    .join("");
+}
+
 function renderLogs() {
-  if (!state.logs.length) {
+  const total = state.logs.length;
+  const totalPages = getLogTotalPages();
+  state.logPage = clampPage(state.logPage, totalPages);
+
+  const startIndex = (state.logPage - 1) * state.logLimit;
+  const rows = state.logs.slice(startIndex, startIndex + state.logLimit);
+
+  el.logMeta.textContent = `${total} kayıt`;
+  el.clearLogsButton.disabled = total === 0;
+  el.logPageInfo.textContent = `Sayfa ${state.logPage} / ${totalPages}`;
+  el.logFirstButton.disabled = state.logPage <= 1;
+  el.logPrevButton.disabled = state.logPage <= 1;
+  el.logNextButton.disabled = state.logPage >= totalPages;
+  el.logLastButton.disabled = state.logPage >= totalPages;
+  el.logJumpInput.max = String(totalPages);
+  if (document.activeElement !== el.logJumpInput) {
+    el.logJumpInput.value = String(state.logPage);
+  }
+
+  if (!rows.length) {
     el.liveLog.textContent = "Henüz log yok.";
     return;
   }
 
-  el.liveLog.textContent = state.logs
+  const viewingLatest = state.logPage === totalPages;
+
+  el.liveLog.textContent = rows
     .map((entry) => {
       const level = String(entry?.level || "info").toUpperCase();
       return `[${formatDate(entry?.timestamp)}] [${level}] ${entry?.message || ""}`;
     })
     .join("\n");
-  el.liveLog.scrollTop = el.liveLog.scrollHeight;
+  if (viewingLatest) {
+    el.liveLog.scrollTop = el.liveLog.scrollHeight;
+  }
 }
 
 function renderHistory() {
   const rows = state.history;
-  el.historyMeta.textContent = `${rows.length} kayıt`;
+  el.historyMeta.textContent = `${state.historyTotal} kayıt`;
+  el.clearHistoryButton.disabled = state.running || state.historyTotal === 0;
+  el.historyPageInfo.textContent = `Sayfa ${state.historyPage} / ${state.historyTotalPages}`;
+  el.historyFirstButton.disabled = state.historyPage <= 1;
+  el.historyPrevButton.disabled = state.historyPage <= 1;
+  el.historyNextButton.disabled = state.historyPage >= state.historyTotalPages;
+  el.historyLastButton.disabled = state.historyPage >= state.historyTotalPages;
+  el.historyJumpInput.max = String(state.historyTotalPages);
+  if (document.activeElement !== el.historyJumpInput) {
+    el.historyJumpInput.value = String(state.historyPage);
+  }
 
   if (!rows.length) {
     el.historyBody.innerHTML = '<tr><td colspan="7">Kayıt bulunamadı.</td></tr>';
@@ -326,7 +528,20 @@ function renderHistory() {
       const processedPages = Array.isArray(row?.pagesProcessed) && row.pagesProcessed.length
         ? row.pagesProcessed.join(", ")
         : "-";
-      const result = `ok:${row?.downloadedCount || 0} / fail:${row?.failedCount || 0}`;
+      const resumeSummary = row?.resume?.applied
+        ? `resume:s.${row?.resume?.resumedFromPage ?? "-"}`
+        : row?.resume?.requested
+          ? "resume:istek"
+          : "resume:-";
+      const totalTargetCountRaw = Number(row?.totalTargetCount || 0);
+      const hasKnownTotal = Number.isFinite(totalTargetCountRaw) && totalTargetCountRaw > 0;
+      const targetLabel = hasKnownTotal
+        ? `${totalTargetCountRaw}${row?.totalTargetCountCapped ? "+" : ""}`
+        : "-";
+      const duplicateCount = Number(row?.duplicateCount || 0);
+      const result = `ok:${row?.downloadedCount || 0} / fail:${row?.failedCount || 0} / hedef:${targetLabel} / worker:${Number(
+        row?.workerCount || 1,
+      )} / dup:${duplicateCount} / ${resumeSummary}`;
       return `<tr>
   <td>${escapeHtml(formatDate(row?.startedAt))}</td>
   <td>${escapeHtml(row?.type || "-")}</td>
@@ -342,13 +557,16 @@ function renderHistory() {
 
 function renderFiles() {
   const rows = state.files;
-  el.filesMeta.textContent = `${rows.length} dosya`;
-
-  const visibleKeys = new Set(rows.map((row) => buildFileKey(row.type, row.fileName)));
-  for (const key of [...state.selectedFileKeys]) {
-    if (!visibleKeys.has(key)) {
-      state.selectedFileKeys.delete(key);
-    }
+  const selectedCount = state.selectedFileKeys.size;
+  el.filesMeta.textContent = `${state.filesTotal} dosya | ${selectedCount} seçili`;
+  el.filesPageInfo.textContent = `Sayfa ${state.filesPage} / ${state.filesTotalPages}`;
+  el.filesFirstButton.disabled = state.filesPage <= 1;
+  el.filesPrevButton.disabled = state.filesPage <= 1;
+  el.filesNextButton.disabled = state.filesPage >= state.filesTotalPages;
+  el.filesLastButton.disabled = state.filesPage >= state.filesTotalPages;
+  el.filesJumpInput.max = String(state.filesTotalPages);
+  if (document.activeElement !== el.filesJumpInput) {
+    el.filesJumpInput.value = String(state.filesPage);
   }
 
   if (!rows.length) {
@@ -376,38 +594,78 @@ function renderFiles() {
   const allChecked = rows.length > 0 && rows.every((row) => state.selectedFileKeys.has(buildFileKey(row.type, row.fileName)));
   el.selectAllFilesCheckbox.checked = allChecked;
   el.deleteSelectedButton.disabled = state.selectedFileKeys.size === 0;
-  el.deleteByTypeButton.disabled = !String(el.filesTypeFilter.value || "").trim() || rows.length === 0;
-  el.deleteAllButton.disabled = rows.length === 0;
+  el.deleteByTypeButton.disabled = !String(el.filesTypeFilter.value || "").trim() || state.filesTotal === 0;
+  el.deleteAllButton.disabled = state.filesTotal === 0;
 }
 
 async function refreshStatus() {
+  const wasRunning = state.running;
   const payload = await fetchJson("/api/ekapv3/status");
   const data = payload?.data || {};
+  const previousLogTotalPages = Math.max(1, Math.ceil((state.logs.length || 0) / state.logLimit));
+  const wasViewingLatestLogs = state.logPage >= previousLogTotalPages;
+
   state.running = Boolean(data.running);
   state.stopRequested = Boolean(data.stopRequested);
   state.currentRun = data.currentRun || null;
   state.lastRun = data.lastRun || null;
   state.logs = Array.isArray(data.logs) ? data.logs : [];
+
+  const nextLogTotalPages = Math.max(1, Math.ceil((state.logs.length || 0) / state.logLimit));
+  state.logPage = wasViewingLatestLogs ? nextLogTotalPages : clampPage(state.logPage, nextLogTotalPages);
+
   renderStatus();
   renderLogs();
+
+  if (wasRunning !== state.running) {
+    await refreshHistory().catch(() => {});
+  }
+}
+
+async function refreshOpsDashboard() {
+  const payload = await fetchJson("/api/ops/dashboard");
+  state.opsDashboard = payload?.data || null;
+  renderOpsDashboard();
 }
 
 async function refreshHistory() {
-  const payload = await fetchJson("/api/ekapv3/history?limit=200");
+  const params = new URLSearchParams();
+  params.set("page", String(state.historyPage));
+  params.set("limit", String(state.historyLimit));
+  const payload = await fetchJson(`/api/ekapv3/history?${params.toString()}`);
   state.history = Array.isArray(payload?.data) ? payload.data : [];
+  const meta = payload?.meta || {};
+  const total = Number(meta.total);
+  const totalPages = Number(meta.totalPages);
+  const page = Number(meta.page);
+  state.historyTotal = Number.isFinite(total) && total >= 0 ? Math.floor(total) : state.history.length;
+  state.historyTotalPages = Number.isFinite(totalPages) && totalPages >= 1
+    ? Math.floor(totalPages)
+    : Math.max(1, Math.ceil(state.historyTotal / state.historyLimit));
+  state.historyPage = clampPage(page || state.historyPage, state.historyTotalPages);
   renderHistory();
 }
 
 async function refreshFiles() {
   const selectedType = String(el.filesTypeFilter.value || "").trim();
   const params = new URLSearchParams();
-  params.set("limit", "800");
+  params.set("page", String(state.filesPage));
+  params.set("limit", String(state.filesLimit));
   if (selectedType) {
     params.set("type", selectedType);
   }
 
   const payload = await fetchJson(`/api/ekapv3/files?${params.toString()}`);
   state.files = Array.isArray(payload?.data) ? payload.data : [];
+  const meta = payload?.meta || {};
+  const total = Number(meta.total);
+  const totalPages = Number(meta.totalPages);
+  const page = Number(meta.page);
+  state.filesTotal = Number.isFinite(total) && total >= 0 ? Math.floor(total) : state.files.length;
+  state.filesTotalPages = Number.isFinite(totalPages) && totalPages >= 1
+    ? Math.floor(totalPages)
+    : Math.max(1, Math.ceil(state.filesTotal / state.filesLimit));
+  state.filesPage = clampPage(page || state.filesPage, state.filesTotalPages);
   renderFiles();
 }
 
@@ -566,6 +824,52 @@ async function runDeleteAllFiles() {
   });
 }
 
+async function runClearLogs() {
+  if (!state.logs.length) {
+    setStatus("Temizlenecek canlı log kaydı yok.");
+    return;
+  }
+
+  openConfirmationDialog({
+    title: "Canlı Logları Temizle",
+    message: "Canlı log kayıtları temizlenecek. Bu işlem geri alınamaz.",
+    action: async (confirmation) => {
+      const payload = await postJson("/api/ekapv3/logs/clear", {
+        confirmation,
+      });
+      const clearedCount = Number(payload?.data?.clearedCount || 0);
+      state.logPage = 1;
+      await refreshStatus();
+      setStatus(`${clearedCount} log kaydı temizlendi.`, "success");
+    },
+  });
+}
+
+async function runClearHistory() {
+  if (state.running) {
+    throw new Error("EKAP v3 çalışırken indirme geçmişi temizlenemez.");
+  }
+  if (state.historyTotal <= 0) {
+    setStatus("Temizlenecek indirme geçmişi kaydı yok.");
+    return;
+  }
+
+  openConfirmationDialog({
+    title: "İndirme Geçmişini Temizle",
+    message: "İndirme geçmişi kayıtları tamamen temizlenecek. Bu işlem geri alınamaz.",
+    action: async (confirmation) => {
+      const payload = await postJson("/api/ekapv3/history/clear", {
+        confirmation,
+      });
+      const deletedCount = Number(payload?.data?.deletedCount || 0);
+      state.historyPage = 1;
+      await refreshHistory();
+      await refreshOpsDashboard();
+      setStatus(`${deletedCount} geçmiş kaydı temizlendi.`, "success");
+    },
+  });
+}
+
 async function openDownloadsFolder() {
   const type = String(el.filesTypeFilter.value || "").trim();
   await postJson("/api/ekapv3/files/open-dir", {
@@ -578,9 +882,12 @@ el.form.addEventListener(
   withAsyncStatus(async (event) => {
     event.preventDefault();
     const payload = readFormPayload();
-    await postJson("/api/ekapv3/start", payload);
+    await postJson("/api/ekapv3/download", payload);
+    state.logPage = 1;
+    state.historyPage = 1;
     await refreshStatus();
     await refreshHistory();
+    await refreshOpsDashboard();
   }, "Başlatma başarısız."),
 );
 
@@ -588,19 +895,130 @@ el.allPages.addEventListener("change", () => {
   applyAllPagesUi();
 });
 
+el.logPrevButton.addEventListener("click", () => {
+  if (state.logPage <= 1) return;
+  state.logPage -= 1;
+  renderLogs();
+});
+
+el.logFirstButton.addEventListener("click", () => {
+  if (state.logPage <= 1) return;
+  state.logPage = 1;
+  renderLogs();
+});
+
+el.logNextButton.addEventListener("click", () => {
+  const totalPages = getLogTotalPages();
+  if (state.logPage >= totalPages) return;
+  state.logPage += 1;
+  renderLogs();
+});
+
+el.logLastButton.addEventListener("click", () => {
+  const totalPages = getLogTotalPages();
+  if (state.logPage >= totalPages) return;
+  state.logPage = totalPages;
+  renderLogs();
+});
+
+el.logJumpButton.addEventListener("click", () => {
+  const totalPages = getLogTotalPages();
+  state.logPage = clampPage(el.logJumpInput.value, totalPages);
+  renderLogs();
+});
+
+el.logJumpInput.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") return;
+  event.preventDefault();
+  const totalPages = getLogTotalPages();
+  state.logPage = clampPage(el.logJumpInput.value, totalPages);
+  renderLogs();
+});
+
+el.clearLogsButton.addEventListener(
+  "click",
+  withAsyncStatus(async () => {
+    await runClearLogs();
+  }, "Canlı loglar temizlenemedi."),
+);
+
 el.stopButton.addEventListener(
   "click",
   withAsyncStatus(async () => {
     await postJson("/api/ekapv3/stop", {});
     await refreshStatus();
+    await refreshOpsDashboard();
   }, "Durdurma başarısız."),
 );
 
 el.filesTypeFilter.addEventListener(
   "change",
   withAsyncStatus(async () => {
+    state.filesPage = 1;
+    state.selectedFileKeys.clear();
     await refreshFiles();
   }, "Dosya listesi alınamadı."),
+);
+
+el.historyPrevButton.addEventListener(
+  "click",
+  withAsyncStatus(async () => {
+    if (state.historyPage <= 1) return;
+    state.historyPage -= 1;
+    await refreshHistory();
+  }, "Geçmiş listesi alınamadı."),
+);
+
+el.historyFirstButton.addEventListener(
+  "click",
+  withAsyncStatus(async () => {
+    if (state.historyPage <= 1) return;
+    state.historyPage = 1;
+    await refreshHistory();
+  }, "Geçmiş listesi alınamadı."),
+);
+
+el.historyNextButton.addEventListener(
+  "click",
+  withAsyncStatus(async () => {
+    if (state.historyPage >= state.historyTotalPages) return;
+    state.historyPage += 1;
+    await refreshHistory();
+  }, "Geçmiş listesi alınamadı."),
+);
+
+el.historyLastButton.addEventListener(
+  "click",
+  withAsyncStatus(async () => {
+    if (state.historyPage >= state.historyTotalPages) return;
+    state.historyPage = state.historyTotalPages;
+    await refreshHistory();
+  }, "Geçmiş listesi alınamadı."),
+);
+
+el.historyJumpButton.addEventListener(
+  "click",
+  withAsyncStatus(async () => {
+    state.historyPage = clampPage(el.historyJumpInput.value, state.historyTotalPages);
+    await refreshHistory();
+  }, "Geçmiş listesi alınamadı."),
+);
+
+el.historyJumpInput.addEventListener(
+  "keydown",
+  withAsyncStatus(async (event) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    state.historyPage = clampPage(el.historyJumpInput.value, state.historyTotalPages);
+    await refreshHistory();
+  }, "Geçmiş listesi alınamadı."),
+);
+
+el.clearHistoryButton.addEventListener(
+  "click",
+  withAsyncStatus(async () => {
+    await runClearHistory();
+  }, "İndirme geçmişi temizlenemedi."),
 );
 
 el.filesRefreshButton.addEventListener(
@@ -622,6 +1040,60 @@ el.openDownloadsButton.addEventListener(
       setStatus("Klasör açıldı.", "success");
     }
   }, "Klasör açılamadı."),
+);
+
+el.filesPrevButton.addEventListener(
+  "click",
+  withAsyncStatus(async () => {
+    if (state.filesPage <= 1) return;
+    state.filesPage -= 1;
+    await refreshFiles();
+  }, "Dosya listesi alınamadı."),
+);
+
+el.filesFirstButton.addEventListener(
+  "click",
+  withAsyncStatus(async () => {
+    if (state.filesPage <= 1) return;
+    state.filesPage = 1;
+    await refreshFiles();
+  }, "Dosya listesi alınamadı."),
+);
+
+el.filesNextButton.addEventListener(
+  "click",
+  withAsyncStatus(async () => {
+    if (state.filesPage >= state.filesTotalPages) return;
+    state.filesPage += 1;
+    await refreshFiles();
+  }, "Dosya listesi alınamadı."),
+);
+
+el.filesLastButton.addEventListener(
+  "click",
+  withAsyncStatus(async () => {
+    if (state.filesPage >= state.filesTotalPages) return;
+    state.filesPage = state.filesTotalPages;
+    await refreshFiles();
+  }, "Dosya listesi alınamadı."),
+);
+
+el.filesJumpButton.addEventListener(
+  "click",
+  withAsyncStatus(async () => {
+    state.filesPage = clampPage(el.filesJumpInput.value, state.filesTotalPages);
+    await refreshFiles();
+  }, "Dosya listesi alınamadı."),
+);
+
+el.filesJumpInput.addEventListener(
+  "keydown",
+  withAsyncStatus(async (event) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    state.filesPage = clampPage(el.filesJumpInput.value, state.filesTotalPages);
+    await refreshFiles();
+  }, "Dosya listesi alınamadı."),
 );
 
 el.selectAllFilesCheckbox.addEventListener("change", () => {
@@ -734,6 +1206,7 @@ el.approveConfirmButton.addEventListener(
     await refreshStatus();
     await refreshHistory();
     await refreshFiles();
+    await refreshOpsDashboard();
   } catch (error) {
     setStatus(error?.message || "Durum alınamadı.", "error");
   }
@@ -747,7 +1220,6 @@ el.approveConfirmButton.addEventListener(
     void (async () => {
       try {
         await refreshStatus();
-        await refreshHistory();
         statusPollFailureCount = 0;
       } catch (_) {
         statusPollFailureCount += 1;
@@ -759,6 +1231,27 @@ el.approveConfirmButton.addEventListener(
       }
     })();
   }, 2500);
+
+  setInterval(() => {
+    if (historyPollInFlight) {
+      return;
+    }
+    historyPollInFlight = true;
+
+    void (async () => {
+      try {
+        await refreshHistory();
+        historyPollFailureCount = 0;
+      } catch (_) {
+        historyPollFailureCount += 1;
+        if (historyPollFailureCount >= 2) {
+          setStatus("Geçmiş listesi güncellenemiyor.", "error");
+        }
+      } finally {
+        historyPollInFlight = false;
+      }
+    })();
+  }, 15000);
 
   setInterval(() => {
     if (filesPollInFlight) {
@@ -780,4 +1273,25 @@ el.approveConfirmButton.addEventListener(
       }
     })();
   }, 10000);
+
+  setInterval(() => {
+    if (opsPollInFlight) {
+      return;
+    }
+    opsPollInFlight = true;
+
+    void (async () => {
+      try {
+        await refreshOpsDashboard();
+        opsPollFailureCount = 0;
+      } catch (_) {
+        opsPollFailureCount += 1;
+        if (opsPollFailureCount >= 2) {
+          setStatus("Operasyon dashboard güncellenemiyor.", "error");
+        }
+      } finally {
+        opsPollInFlight = false;
+      }
+    })();
+  }, 15000);
 })();

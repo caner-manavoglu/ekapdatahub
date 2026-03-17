@@ -12,7 +12,10 @@ Bu proje, EKAP arama servisinden ihale kayıtlarını sayfalı olarak çeker, he
   - metinleştirilmiş çıktı (`veriHtmlCleanText`) üretir,
   - temizlenmiş HTML (`veriHtmlCleanHtml`) üretir.
 - Sonucu MongoDB'de `upsert` eder (`_id = sourceIhaleId`).
+- Incremental modda değişmeyen kayıtları atlayıp taramayı erken sonlandırabilir.
+- Kayıtları normalize ederek `sync.normalizedUniqueKey` üretir ve sayfa içi duplicate kayıtları conflict policy ile temizler.
 - Detay içeriğini varsayılan olarak kısaltır ve sadece seçili alanları saklar.
+- Çalışma sonunda p50/p95 latency, retry sayısı, queue depth ve hata tipleri metriklerini raporlar.
 - Her ihale için `reports/pdfs` altında ayrı PDF oluşturur.
 - Web arayüzünde ihaleleri listeler ve ilan bazında:
   - `Tam Dokümantasyon (HTML)`
@@ -31,30 +34,6 @@ MongoDB'yi Docker ile ayağa kaldırmak için:
 
 ```bash
 docker run -d --name ekap-mongo -p 27017:27017 mongo:7
-```
-
-## Geliştirme Ortamı (Dev)
-
-İzole bir geliştirme ortamı için `.env.dev` + ayrı Mongo portu (`27018`) kullanabilirsiniz:
-
-```bash
-npm run dev:prepare
-npm run dev:db:up
-npm run dev:web
-```
-
-Dev arayüz: `http://127.0.0.1:8788`
-
-Scraper'ı dev ayarlarıyla çalıştırmak için:
-
-```bash
-npm run dev:scraper
-```
-
-Dev Mongo'yu kapatmak için:
-
-```bash
-npm run dev:db:down
 ```
 
 ## Çalıştırma
@@ -90,6 +69,20 @@ Mongo index denetimini (`explain` dahil) çalıştırmak için:
 npm run db:audit-indexes
 ```
 
+Operasyon benchmark/regresyon kontrolünü çalıştırmak için:
+
+```bash
+npm run ops:benchmark
+```
+
+Sık kullanılan örnek:
+
+```bash
+npm run ops:benchmark -- --samples=8 --maxRegressionPct=25 --saveRemote=true
+```
+
+Bu script `/.ops/benchmarks` altında zaman damgalı snapshot üretir, varsa son snapshot ile p95 karşılaştırması yapar ve eşik aşımında `exit code 2` döner.
+
 Frontend arayüzünü başlatmak için:
 
 ```bash
@@ -106,6 +99,7 @@ Bu komut tek başına yeterlidir. Login sonrası ana sayfada iki seçenek görü
 `/indirilenler` sayfasında çekim tarihine göre kayıtları listeleyebilir, metin araması yapabilir, seçili kayıtları veya seçilen tarihin tamamını silebilirsiniz.
 Silme işlemleri için `onaylıyorum` metni zorunludur.
 `AUTH_ENABLED=true` ise panele giriş zorunludur (`/login`).
+`EKAP v3` sayfasında Operasyon Dashboard kartları ile indirme/scrape KPI ve aktif alarm durumu tek panelde izlenir.
 
 Eski klasör yapısından (`ekap-v3/downloads-mahkeme`, `ekap-v3/downloads-uyusmazlik`) yeni yapıya tek seferlik geçiş gerekiyorsa:
 
@@ -120,7 +114,6 @@ Not: Bu migration komutu geçiş dönemi içindir ve 30 Eylül 2026 sonrası kal
 - `MONGODB_URI`: Mongo bağlantısı
 - `MONGODB_DB`: Veritabanı adı
 - `MONGODB_COLLECTION`: Koleksiyon adı
-- `ENV_FILE`: Yüklenecek `.env` dosya yolu (örn: `.env.dev`)
 - `GENERATE_PDF`: `true` ise her satır için PDF oluşturur (`DRY_RUN=true` iken belirtilmezse varsayılan `false`)
 - `PDF_OUTPUT_DIR`: PDF çıktı klasörü
 - `PDF_FONT_PATH`: PDF için kullanılacak Unicode font dosya yolu (öneri: `Arial Unicode.ttf`)
@@ -132,6 +125,34 @@ Not: Bu migration komutu geçiş dönemi içindir ve 30 Eylül 2026 sonrası kal
 - `RETRY_COUNT`: Hata durumunda deneme sayısı
 - `RETRY_DELAY_MS`: Denemeler arası temel bekleme (artan backoff uygulanır)
 - `RATE_LIMIT_MS`: İstekler arası bekleme
+- `DETAIL_CONCURRENCY`: Detay işlemede eşzamanlı worker sayısı (`1-16`, varsayılan `4`)
+- `WRITE_BATCH_SIZE`: MongoDB `bulkWrite` batch büyüklüğü (`10-1000`)
+- `SCRAPE_INCREMENTAL`: `true` ise değişmeyen kayıtları atlayarak artımlı çalışır
+- `SCRAPE_INCREMENTAL_STOP_STREAK`: Art arda değişmeyen kayıt eşiği; eşik aşılırsa tarama erken biter
+- `SCRAPE_INCREMENTAL_CHECKPOINT`: Incremental son görülen kayıt checkpoint dosya yolu
+- `SCRAPE_ADAPTIVE_PAGINATION`: `true` ise full scan sırasında `take/pageSize` dinamik ayarlanır
+- `SCRAPE_PAGE_SIZE_MIN`: Adaptive mod alt sınır `take`
+- `SCRAPE_PAGE_SIZE_MAX`: Adaptive mod üst sınır `take`
+- `SCRAPE_PAGE_SIZE_STEP`: Adaptive mod artış/azalış adımı
+- `SCRAPE_PAGE_TARGET_MS`: Liste isteği hedef latency (ms), adaptive tuning bu hedefe göre çalışır
+- `SCRAPE_ADAPTIVE_DETAIL_CONCURRENCY`: `true` ise detay worker sayısı sayfa performansına göre dinamik ayarlanır
+- `DETAIL_CONCURRENCY_MIN`: Adaptive detail mod alt worker sınırı
+- `DETAIL_CONCURRENCY_MAX`: Adaptive detail mod üst worker sınırı
+- `DETAIL_PAGE_TARGET_MS`: Sayfa başına detay işleme hedef süresi (ms)
+- `SCRAPE_CONDITIONAL_REQUESTS`: `true` ise uygun endpointlerde `If-None-Match` / `If-Modified-Since` ile koşullu istek dener
+- `SCRAPE_CONDITIONAL_CACHE_TTL_MS`: Koşullu istek validator/data cache TTL süresi
+- `SCRAPE_CONDITIONAL_CACHE_SIZE`: Koşullu istek validator/data cache üst sınırı
+- `SCRAPE_RESPONSE_CACHE_ENABLED`: `true` ise aynı list/detail isteklerini kısa TTL içinde doğrudan memory cache'den döndürür
+- `SCRAPE_RESPONSE_CACHE_TTL_MS`: Response cache TTL süresi
+- `SCRAPE_RESPONSE_CACHE_SIZE`: Response cache üst sınırı
+- `SCRAPE_CIRCUIT_BREAKER_ENABLED`: `true` ise ardışık hata eşiğinde circuit breaker devreye girer
+- `SCRAPE_CIRCUIT_BREAKER_THRESHOLD`: Circuit breaker açılma eşiği (ardışık hata sayısı)
+- `SCRAPE_CIRCUIT_BREAKER_COOLDOWN_MS`: Open durumunda bekleme süresi
+- `SCRAPE_CIRCUIT_BREAKER_HALF_OPEN_PAGES`: Half-open modda başarılı geçmesi gereken sayfa adedi
+- `HTTP_KEEP_ALIVE`: `true` ise liste/detay isteklerinde keep-alive agent kullanılır
+- `HTTP_MAX_SOCKETS`: Keep-alive agent için maksimum socket sayısı
+- `HTTP_MAX_FREE_SOCKETS`: Keep-alive agent için maksimum boş socket sayısı
+- `HTTP_KEEP_ALIVE_MS`: Keep-alive bağlantı saklama süresi
 - `STORE_RAW_HTML`: `STORE_FULL_ILAN_CONTENT=true` ise orijinal `veriHtml` saklanır
 - `DRY_RUN`: `true` ise Mongo'ya yazmaz
 - `WEB_PORT`: Frontend/API sunucu portu
@@ -145,7 +166,23 @@ Not: Bu migration komutu geçiş dönemi içindir ve 30 Eylül 2026 sonrası kal
 - `AUTH_LOGIN_MAX_ATTEMPTS`: Pencere başına izin verilen maksimum hatalı deneme
 - `AUTH_USERS`: JSON dizi (username/password/role). Password: `plain:<sifre>` veya `sha256:<hex>`
 - `AUDIT_LOG_COLLECTION`: Silme gibi yıkıcı işlemler için audit kayıt koleksiyonu
-- `WEB_SKIP_OPEN_DIR`: `true` ise "indirilenlere git" sırasında OS dosya yöneticisi otomatik açılmaz
+- `OPS_ALERT_COLLECTION`: Operasyon alarm olay kayıtları koleksiyonu
+- `OPS_BENCHMARK_COLLECTION`: Benchmark snapshot kayıtları koleksiyonu
+- `OPS_DASHBOARD_WINDOW_HOURS`: Ops dashboard varsayılan KPI penceresi (saat)
+- `OPS_ALERT_EVALUATE_INTERVAL_MS`: Alarm kurallarının arka planda değerlendirme aralığı (ms)
+- `OPS_ALERT_DOWNLOAD_FAILURE_RATE_PCT`: İndirme hata oranı alarm eşiği (%)
+- `OPS_ALERT_SCRAPE_LIST_P95_MS`: Scrape liste p95 alarm eşiği (ms)
+- `OPS_ALERT_SCRAPE_DETAIL_P95_MS`: Scrape detay p95 alarm eşiği (ms)
+- `OPS_ALERT_SCRAPE_QUEUE_P95`: Scrape queue depth p95 alarm eşiği
+- `OPS_ALERT_STALLED_RUN_MINUTES`: İndirme run tıkanma alarm eşiği (dakika)
+- `EKAP_V3_PREFLIGHT_CHECK_ENDPOINT`: `true` ise EKAP UI endpoint kontrolü yapılır
+- `EKAP_V3_PREFLIGHT_STRICT`: `true` ise endpoint timeout/network hatasında start isteği bloklanır
+- `EKAP_V3_PREFLIGHT_ENDPOINT_METHOD`: Endpoint health check HTTP metodu (`HEAD`/`GET`)
+- `API_FIRST_DOWNLOAD`: EKAP v3 Playwright indirmede PDF'i once API request ile dener (`true/false`)
+- `API_FIRST_STRICT`: API-first basarisiz olursa UI fallback yerine hataya duser (`true/false`)
+- `OPS_BENCHMARK_COOKIE`: Benchmark scripti için hazır session cookie (opsiyonel)
+- `OPS_BENCHMARK_USERNAME`: Benchmark scripti login kullanıcı adı (opsiyonel)
+- `OPS_BENCHMARK_PASSWORD`: Benchmark scripti login şifresi (opsiyonel)
 
 ## Rol Yetkileri (auth aktifken)
 
