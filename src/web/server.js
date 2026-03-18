@@ -183,11 +183,39 @@ const WEB_SKIP_OPEN_DIR = toBool(process.env.WEB_SKIP_OPEN_DIR, false);
 const EKAP_V3_FILES_CACHE_TTL_MS = Math.max(1_000, toInt(process.env.EKAP_V3_FILES_CACHE_TTL_MS, 5_000));
 const EKAP_V3_COUNT_TIMEOUT_MS = Math.max(5_000, toInt(process.env.EKAP_V3_COUNT_TIMEOUT_MS, 30_000));
 const EKAP_V3_ROWS_PER_PAGE_ESTIMATE = Math.max(1, toInt(process.env.EKAP_V3_ROWS_PER_PAGE_ESTIMATE, 5));
-const EKAP_V3_WORKER_COUNT_DEFAULT = Math.max(1, toInt(process.env.EKAP_V3_WORKER_COUNT, 1));
+const EKAP_V3_WORKER_COUNT_DEFAULT = Math.max(1, toInt(process.env.EKAP_V3_WORKER_COUNT, 3));
 const EKAP_V3_WORKER_COUNT_MAX = Math.max(
   EKAP_V3_WORKER_COUNT_DEFAULT,
   Math.max(1, toInt(process.env.EKAP_V3_WORKER_COUNT_MAX, 8)),
 );
+const EKAP_V3_JOB_CHUNK_SIZE_DEFAULT = Math.max(
+  1,
+  Math.min(8, toInt(process.env.EKAP_V3_JOB_CHUNK_SIZE, 2)),
+);
+const EKAP_V3_JOB_CHUNK_SIZE_MAX = Math.max(
+  EKAP_V3_JOB_CHUNK_SIZE_DEFAULT,
+  Math.max(1, toInt(process.env.EKAP_V3_JOB_CHUNK_SIZE_MAX, 8)),
+);
+const EKAP_V3_TIMEOUT_RETRIES_DEFAULT = Math.max(
+  0,
+  Math.min(6, toInt(process.env.EKAP_V3_TIMEOUT_RETRIES, 1)),
+);
+const EKAP_V3_RETRY_BASE_DELAY_MS_DEFAULT = Math.max(
+  100,
+  toInt(process.env.EKAP_V3_RETRY_BASE_DELAY_MS, 450),
+);
+const EKAP_V3_RETRY_MAX_DELAY_MS_DEFAULT = Math.max(
+  EKAP_V3_RETRY_BASE_DELAY_MS_DEFAULT,
+  toInt(process.env.EKAP_V3_RETRY_MAX_DELAY_MS, 8_000),
+);
+const EKAP_V3_RETRY_JITTER_RATIO_DEFAULT = Math.min(
+  1,
+  Math.max(0, toFiniteNumber(process.env.EKAP_V3_RETRY_JITTER_RATIO, 0.2)),
+);
+const EKAP_V3_DATE_SHARD_ENABLED = toBool(process.env.EKAP_V3_DATE_SHARD_ENABLED, true);
+const EKAP_V3_DATE_SHARD_DAYS = Math.max(1, toInt(process.env.EKAP_V3_DATE_SHARD_DAYS, 7));
+const EKAP_V3_DATE_SHARD_MIN_SPAN_DAYS = Math.max(2, toInt(process.env.EKAP_V3_DATE_SHARD_MIN_SPAN_DAYS, 14));
+const EKAP_V3_DATE_SHARD_MAX_PARALLEL = Math.max(1, toInt(process.env.EKAP_V3_DATE_SHARD_MAX_PARALLEL, 4));
 const EKAP_V3_PREFLIGHT_TIMEOUT_MS = Math.max(1_000, toInt(process.env.EKAP_V3_PREFLIGHT_TIMEOUT_MS, 10_000));
 const EKAP_V3_PREFLIGHT_CHECK_ENDPOINT = toBool(process.env.EKAP_V3_PREFLIGHT_CHECK_ENDPOINT, true);
 const EKAP_V3_PREFLIGHT_STRICT = toBool(process.env.EKAP_V3_PREFLIGHT_STRICT, false);
@@ -797,6 +825,93 @@ function normalizeEkapV3Type(value) {
   return normalized === "uyusmazlik" ? "uyusmazlik" : normalized === "mahkeme" ? "mahkeme" : "";
 }
 
+function parseIsoDateOnly(value) {
+  const match = String(value || "").trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (
+    Number.isNaN(date.getTime()) ||
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  ) {
+    return null;
+  }
+  return date;
+}
+
+function getInclusiveDateSpanDays(fromDate, toDate) {
+  const from = parseIsoDateOnly(fromDate);
+  const to = parseIsoDateOnly(toDate);
+  if (!from || !to) {
+    return 0;
+  }
+  const oneDayMs = 24 * 60 * 60 * 1000;
+  return Math.max(0, Math.floor((to.getTime() - from.getTime()) / oneDayMs) + 1);
+}
+
+function buildEkapV3DateShardPlan(options) {
+  const payload = options && typeof options === "object" ? options : {};
+  const spanDays = getInclusiveDateSpanDays(payload.fromDate, payload.toDate);
+  const requestedEnabled =
+    payload.dateShardEnabled === null || payload.dateShardEnabled === undefined
+      ? EKAP_V3_DATE_SHARD_ENABLED
+      : Boolean(payload.dateShardEnabled);
+  const shardDays = Math.max(
+    1,
+    Math.min(62, toInt(payload.dateShardDays, EKAP_V3_DATE_SHARD_DAYS)),
+  );
+  const requestedParallel = Math.max(
+    1,
+    Math.min(16, toInt(payload.dateShardParallel, payload.workerCount || 1)),
+  );
+  const shardCount = spanDays > 0 ? Math.ceil(spanDays / shardDays) : 0;
+  const shardParallel = Math.max(
+    1,
+    Math.min(requestedParallel, EKAP_V3_DATE_SHARD_MAX_PARALLEL, Math.max(1, shardCount)),
+  );
+
+  let enabled = true;
+  let reason = "ok";
+  if (!requestedEnabled) {
+    enabled = false;
+    reason = "disabled-by-config";
+  } else if (!payload.allPages) {
+    enabled = false;
+    reason = "allPages-required";
+  } else if (payload.startRow > 1) {
+    enabled = false;
+    reason = "startRow>1";
+  } else if (payload.resumeFromLast) {
+    enabled = false;
+    reason = "resume-enabled";
+  } else if (spanDays < EKAP_V3_DATE_SHARD_MIN_SPAN_DAYS) {
+    enabled = false;
+    reason = "range-too-short";
+  } else if (shardCount < 2) {
+    enabled = false;
+    reason = "single-shard";
+  } else if (shardParallel < 2) {
+    enabled = false;
+    reason = "parallel<2";
+  }
+
+  return {
+    enabled,
+    reason,
+    spanDays,
+    shardDays,
+    shardCount,
+    shardParallel,
+    minSpanDays: EKAP_V3_DATE_SHARD_MIN_SPAN_DAYS,
+    maxParallel: EKAP_V3_DATE_SHARD_MAX_PARALLEL,
+    requestedEnabled,
+  };
+}
+
 function parseEkapV3Options(body) {
   const payload = body && typeof body === "object" ? body : {};
   const type = normalizeEkapV3Type(payload.type);
@@ -819,6 +934,38 @@ function parseEkapV3Options(body) {
     EKAP_V3_WORKER_COUNT_MAX,
     Math.max(1, toInt(payload.workerCount, EKAP_V3_WORKER_COUNT_DEFAULT)),
   );
+  const jobChunkSize = Math.min(
+    EKAP_V3_JOB_CHUNK_SIZE_MAX,
+    Math.max(1, toInt(payload.jobChunkSize, EKAP_V3_JOB_CHUNK_SIZE_DEFAULT)),
+  );
+  const timeoutRetries = Math.max(
+    0,
+    Math.min(6, toInt(payload.timeoutRetries, EKAP_V3_TIMEOUT_RETRIES_DEFAULT)),
+  );
+  const retryBaseDelayMs = Math.max(
+    100,
+    Math.min(120_000, toInt(payload.retryBaseDelayMs, EKAP_V3_RETRY_BASE_DELAY_MS_DEFAULT)),
+  );
+  const retryMaxDelayMs = Math.max(
+    retryBaseDelayMs,
+    Math.min(240_000, toInt(payload.retryMaxDelayMs, EKAP_V3_RETRY_MAX_DELAY_MS_DEFAULT)),
+  );
+  const retryJitterRatio = Math.min(
+    1,
+    Math.max(0, toFiniteNumber(payload.retryJitterRatio, EKAP_V3_RETRY_JITTER_RATIO_DEFAULT)),
+  );
+  const dateShardEnabled =
+    payload.dateShardEnabled === undefined || payload.dateShardEnabled === null
+      ? null
+      : toBool(payload.dateShardEnabled, false);
+  const dateShardDays =
+    payload.dateShardDays === undefined || payload.dateShardDays === null
+      ? null
+      : Math.max(1, Math.min(62, toInt(payload.dateShardDays, EKAP_V3_DATE_SHARD_DAYS)));
+  const dateShardParallel =
+    payload.dateShardParallel === undefined || payload.dateShardParallel === null
+      ? null
+      : Math.max(1, Math.min(16, toInt(payload.dateShardParallel, workerCount)));
   const browserModeRaw = String(payload.browserMode || "headless")
     .trim()
     .toLocaleLowerCase("tr-TR");
@@ -834,6 +981,14 @@ function parseEkapV3Options(body) {
     allPages,
     resumeFromLast,
     workerCount,
+    jobChunkSize,
+    timeoutRetries,
+    retryBaseDelayMs,
+    retryMaxDelayMs,
+    retryJitterRatio,
+    dateShardEnabled,
+    dateShardDays,
+    dateShardParallel,
     browserMode,
   };
 }
@@ -2588,6 +2743,7 @@ const handleEkapV3Start = async (req, res, next) => {
         source: "checkpoint",
       };
     }
+    const dateSharding = buildEkapV3DateShardPlan(options);
 
     preflight = await runEkapV3Preflight(options);
 
@@ -2618,6 +2774,11 @@ const handleEkapV3Start = async (req, res, next) => {
       `--startPage=${options.startPage}`,
       `--startRow=${options.startRow}`,
       `--workerCount=${options.workerCount}`,
+      `--jobChunkSize=${options.jobChunkSize}`,
+      `--timeoutRetries=${options.timeoutRetries}`,
+      `--retryBaseDelayMs=${options.retryBaseDelayMs}`,
+      `--retryMaxDelayMs=${options.retryMaxDelayMs}`,
+      `--retryJitterRatio=${options.retryJitterRatio}`,
       `--browserMode=${options.browserMode}`,
       "--checkpoint=true",
       `--checkpointPath=${checkpointPath}`,
@@ -2627,6 +2788,12 @@ const handleEkapV3Start = async (req, res, next) => {
       args.push("--allPages=true");
     } else {
       args.push(`--endPage=${options.endPage}`);
+    }
+    if (dateSharding.enabled) {
+      args.push("--dateShardEnabled=true");
+      args.push(`--dateShardDays=${dateSharding.shardDays}`);
+      args.push(`--dateShardParallel=${dateSharding.shardParallel}`);
+      args.push(`--dateShardMinSpanDays=${dateSharding.minSpanDays}`);
     }
 
     const runId = createEkapV3RunId();
@@ -2650,6 +2817,12 @@ const handleEkapV3Start = async (req, res, next) => {
       checkpointPath,
       checkpointMeta,
       workerCount: options.workerCount,
+      jobChunkSize: options.jobChunkSize,
+      timeoutRetries: options.timeoutRetries,
+      retryBaseDelayMs: options.retryBaseDelayMs,
+      retryMaxDelayMs: options.retryMaxDelayMs,
+      retryJitterRatio: options.retryJitterRatio,
+      dateSharding,
       browserMode: options.browserMode,
       status: "running",
       stopRequested: false,
@@ -2702,7 +2875,22 @@ const handleEkapV3Start = async (req, res, next) => {
       );
     }
     appendEkapV3Log("info", `[RUN] Baslatildi: ${scriptName} ${args.slice(1).join(" ")}`);
-    appendEkapV3Log("info", `[POOL] workerCount=${options.workerCount}`);
+    appendEkapV3Log(
+      "info",
+      `[POOL] workerCount=${options.workerCount} chunkSize=${options.jobChunkSize}`,
+    );
+    appendEkapV3Log(
+      "info",
+      `[RETRY] timeoutRetries=${options.timeoutRetries} baseDelayMs=${options.retryBaseDelayMs} maxDelayMs=${options.retryMaxDelayMs} jitter=${options.retryJitterRatio}`,
+    );
+    appendEkapV3Log(
+      dateSharding.enabled ? "info" : "warn",
+      `[SHARD] enabled=${dateSharding.enabled ? "1" : "0"} reason=${dateSharding.reason} spanDays=${
+        dateSharding.spanDays
+      } shardDays=${dateSharding.shardDays} shardCount=${dateSharding.shardCount} parallel=${
+        dateSharding.shardParallel
+      }`,
+    );
     if (countPreflight.available) {
       appendEkapV3Log(
         "info",
@@ -2741,6 +2929,12 @@ const handleEkapV3Start = async (req, res, next) => {
         checkpoint: null,
         preflight,
         workerCount: options.workerCount,
+        jobChunkSize: options.jobChunkSize,
+        timeoutRetries: options.timeoutRetries,
+        retryBaseDelayMs: options.retryBaseDelayMs,
+        retryMaxDelayMs: options.retryMaxDelayMs,
+        retryJitterRatio: options.retryJitterRatio,
+        dateSharding,
         browserMode: options.browserMode,
         status: "running",
         stopRequested: false,
@@ -3077,6 +3271,12 @@ app.get("/api/ekapv3/history", async (req, res, next) => {
         checkpoint: row?.checkpoint || null,
         preflight: row?.preflight || null,
         workerCount: row?.workerCount || 1,
+        jobChunkSize: row?.jobChunkSize || null,
+        timeoutRetries: row?.timeoutRetries ?? null,
+        retryBaseDelayMs: row?.retryBaseDelayMs ?? null,
+        retryMaxDelayMs: row?.retryMaxDelayMs ?? null,
+        retryJitterRatio: row?.retryJitterRatio ?? null,
+        dateSharding: row?.dateSharding || null,
         status: row?.status || null,
         stopRequested: Boolean(row?.stopRequested),
         downloadedCount: row?.downloadedCount || 0,

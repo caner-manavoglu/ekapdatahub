@@ -12,6 +12,35 @@ const DEFAULT_MIN_DOWNLOAD_BYTES = 1_024;
 const DEFAULT_RETRY_MAX_DELAY_MS = 25_000;
 const DEFAULT_RETRY_BASE_DELAY_MS = 900;
 const DEFAULT_RETRY_JITTER_RATIO = 0.25;
+const DEFAULT_DATE_SHARD_DAYS = 7;
+const DEFAULT_DATE_SHARD_MIN_SPAN_DAYS = 14;
+const DEFAULT_CONTEXT_RESET_HARD_FACTOR = 3;
+const DEFAULT_CHECKPOINT_FLUSH_EVERY = 8;
+const DEFAULT_CHECKPOINT_FLUSH_INTERVAL_MS = 1_500;
+const DEFAULT_BLOCK_RESOURCES = true;
+const DEFAULT_AUTO_TUNE = true;
+const EKAP_ROWS_PER_PAGE = 10;
+const EKAP_DECISION_API_URLS = {
+  uyusmazlik: 'https://ekapv2.kik.gov.tr/b_ihalearaclari/api/KurulKararlari/GetKurulKararlari',
+  mahkeme: 'https://ekapv2.kik.gov.tr/b_ihalearaclari/api/KurulKararlari/GetKurulKararlariMk',
+};
+const EKAP_GET_SORGULAMA_URL = 'https://ekapv2.kik.gov.tr/b_ihalearaclari/api/KurulKararlari/GetSorgulamaUrl';
+const EKAP_SORGU_SAYFA_TIPI = {
+  uyusmazlik: 1,
+  mahkeme: 2,
+};
+const EKAP_DECISION_RAW_KEY = Buffer.from('ecc1a42b0c8779aa04f47bdb529e7caeaee4dbaed068ae78204cfa048f9fd3b0', 'hex');
+const BLOCKED_RESOURCE_TYPES = new Set(['image', 'font', 'media']);
+const BLOCKED_URL_PATTERNS = [
+  'google-analytics.com',
+  'googletagmanager.com',
+  'doubleclick.net',
+  'hotjar.com',
+  'clarity.ms',
+  'facebook.net',
+  'segment.io',
+  'sentry.io',
+];
 
 const SELECTORS = {
   dateInputs: ['input.dx-texteditor-input[role="combobox"]', 'input.dx-texteditor-input'],
@@ -86,25 +115,78 @@ const toCalendarValue = (value) => {
   throw new Error(`Invalid date format: ${value}. Use YYYY/MM/DD, YYYY-MM-DD or DD.MM.YYYY`);
 };
 
+const parseCalendarDate = (value) => {
+  const match = String(value || '').match(/^(\d{4})\/(\d{2})\/(\d{2})$/);
+  if (!match) {
+    throw new Error(`Invalid calendar date value: ${value}`);
+  }
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (
+    Number.isNaN(date.getTime()) ||
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  ) {
+    throw new Error(`Invalid calendar date value: ${value}`);
+  }
+  return date;
+};
+
+const formatCalendarDate = (date) => {
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(date.getUTCDate()).padStart(2, '0');
+  return `${year}/${month}/${day}`;
+};
+
+const buildDateShards = ({ fromDate, toDate, shardDays }) => {
+  const safeShardDays = Math.max(1, toBoundedInt(shardDays, DEFAULT_DATE_SHARD_DAYS, 1, 62));
+  const from = parseCalendarDate(fromDate);
+  const to = parseCalendarDate(toDate);
+  if (to.getTime() < from.getTime()) {
+    throw new Error(`Invalid date range for shard: ${fromDate} -> ${toDate}`);
+  }
+
+  const oneDayMs = 24 * 60 * 60 * 1000;
+  const spanDays = Math.floor((to.getTime() - from.getTime()) / oneDayMs) + 1;
+  const shards = [];
+  let cursor = from.getTime();
+  let index = 1;
+
+  while (cursor <= to.getTime()) {
+    const shardStart = new Date(cursor);
+    const shardEndMs = Math.min(to.getTime(), cursor + (safeShardDays - 1) * oneDayMs);
+    const shardEnd = new Date(shardEndMs);
+    shards.push({
+      index,
+      fromDate: formatCalendarDate(shardStart),
+      toDate: formatCalendarDate(shardEnd),
+      spanDays: Math.floor((shardEndMs - cursor) / oneDayMs) + 1,
+    });
+    index += 1;
+    cursor = shardEndMs + oneDayMs;
+  }
+
+  return {
+    spanDays,
+    shardDays: safeShardDays,
+    shards,
+  };
+};
+
 const sanitizeFileName = (value) =>
   String(value || 'download.pdf')
     .replace(/[\\/:*?"<>|]+/g, '_')
     .replace(/\s+/g, ' ')
     .trim();
 
-const ensureUniquePath = (dir, fileName) => {
-  const parsed = path.parse(fileName);
-  const baseName = parsed.name || 'download';
-  const ext = parsed.ext || '.pdf';
-  let candidate = path.join(dir, `${baseName}${ext}`);
-  let seq = 1;
-
-  while (fs.existsSync(candidate)) {
-    candidate = path.join(dir, `${baseName} (${seq})${ext}`);
-    seq += 1;
-  }
-
-  return candidate;
+const createRunTag = () => {
+  const stamp = new Date().toISOString().replace(/[-:.TZ]/g, '');
+  const random = Math.random().toString(36).slice(2, 8);
+  return `run${stamp}_${random}`;
 };
 
 const toBoundedInt = (value, fallback, min = 1, max = Number.POSITIVE_INFINITY) => {
@@ -119,6 +201,175 @@ const toBoolArg = (value, fallback = false) => {
   if (['1', 'true', 'yes', 'on'].includes(text)) return true;
   if (['0', 'false', 'no', 'off'].includes(text)) return false;
   return fallback;
+};
+
+const toApiDateBoundary = (value, boundary) => {
+  const match = String(value || '').trim().match(/^(\d{4})[/-](\d{2})[/-](\d{2})$/);
+  if (!match) {
+    throw new Error(`Invalid API date value: ${value}`);
+  }
+  const day = `${match[3]}.${match[2]}.${match[1]}`;
+  return `${day} ${boundary === 'start' ? '00:00:00' : '23:59:00'}`;
+};
+
+const buildDecisionListPayload = ({ type, fromDate, toDate }) => {
+  const filters = [
+    { key: 'KararTarihi1', value: toApiDateBoundary(fromDate, 'start') },
+    { key: 'KararTarihi2', value: toApiDateBoundary(toDate, 'end') },
+  ];
+
+  if (type === 'mahkeme') {
+    return {
+      sorgulaKurulKararlariMk: {
+        keyValuePairs: {
+          keyValueOfstringanyType: filters,
+        },
+      },
+    };
+  }
+
+  return {
+    sorgulaKurulKararlari: {
+      keyValuePairs: {
+        keyValueOfstringanyType: filters,
+      },
+    },
+  };
+};
+
+const parseDecisionRowsFromApi = ({ type, payload }) => {
+  const isNoRecordMessage = (value) => /bulunamami|kayıt bulunamam|kayit bulunamam/i.test(String(value || ''));
+  const root =
+    type === 'mahkeme'
+      ? payload?.SorgulaKurulKararlariMkResponse?.SorgulaKurulKararlariMkResult
+      : payload?.SorgulaKurulKararlariResponse?.SorgulaKurulKararlariResult;
+
+  if (!root || typeof root !== 'object') {
+    throw new Error(`List API response missing root payload for type=${type}`);
+  }
+
+  const errorCode = String(root?.hataKodu ?? root?.HataKodu ?? '').trim();
+  const errorMessage = String(root?.hataMesaji ?? root?.HataMesaji ?? '').trim();
+  if (errorCode && errorCode !== '0' && !isNoRecordMessage(errorMessage)) {
+    throw new Error(errorMessage || `List API error code: ${errorCode}`);
+  }
+
+  const list = Array.isArray(root?.KurulKararTutanakDetayListesi) ? root.KurulKararTutanakDetayListesi : [];
+  const rows = [];
+  for (const item of list) {
+    const candidates = [item?.KurulKararTutanakDetayi, item?.kurulKararTutanakDetayi];
+    for (const candidate of candidates) {
+      if (Array.isArray(candidate)) {
+        rows.push(...candidate);
+        break;
+      }
+    }
+  }
+  return rows;
+};
+
+const fetchJsonWithTimeout = async ({ url, method = 'GET', headers = {}, body = undefined, timeoutMs = 30_000 }) => {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      method,
+      headers,
+      body,
+      signal: controller.signal,
+    });
+    const raw = await response.text();
+    let payload = null;
+    try {
+      payload = raw ? JSON.parse(raw) : null;
+    } catch (error) {
+      throw new Error(`JSON parse failed for ${url}: ${error.message}`);
+    }
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status} from ${url}`);
+    }
+    return payload;
+  } finally {
+    clearTimeout(timeout);
+  }
+};
+
+const fetchDecisionRows = async ({ type, fromDate, toDate }) => {
+  const url = EKAP_DECISION_API_URLS[type];
+  if (!url) {
+    throw new Error(`Unsupported decision type: ${type}`);
+  }
+  const payload = buildDecisionListPayload({ type, fromDate, toDate });
+  const responsePayload = await fetchJsonWithTimeout({
+    url,
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json;charset=UTF-8',
+    },
+    body: JSON.stringify(payload),
+    timeoutMs: 40_000,
+  });
+  return parseDecisionRowsFromApi({ type, payload: responsePayload });
+};
+
+const fetchDecisionBaseUrl = async ({ type }) => {
+  const sorguSayfaTipi = EKAP_SORGU_SAYFA_TIPI[type];
+  if (!sorguSayfaTipi) {
+    throw new Error(`Unsupported decision type for sorguSayfaTipi: ${type}`);
+  }
+  const payload = await fetchJsonWithTimeout({
+    url: EKAP_GET_SORGULAMA_URL,
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json;charset=UTF-8',
+    },
+    body: JSON.stringify({ sorguSayfaTipi }),
+    timeoutMs: 30_000,
+  });
+  const sorgulamaUrl = String(payload?.sorgulamaUrl || payload?.SorgulamaUrl || '').trim();
+  if (!sorgulamaUrl) {
+    throw new Error(`GetSorgulamaUrl returned empty URL for type=${type}`);
+  }
+  return sorgulamaUrl;
+};
+
+const encryptDecisionId = (value) => {
+  const text = String(value || '').trim();
+  if (!text) {
+    throw new Error('gundemMaddesiId is empty.');
+  }
+  const iv = crypto.randomBytes(16);
+  const cipher = crypto.createCipheriv('aes-256-cbc', EKAP_DECISION_RAW_KEY, iv);
+  const encrypted = Buffer.concat([cipher.update(text, 'utf8'), cipher.final()]);
+  return `${iv.toString('hex')}${encrypted.toString('hex')}`;
+};
+
+const buildDecisionDetailUrl = ({ baseUrl, gundemMaddesiId }) => {
+  const url = new URL(String(baseUrl || '').trim());
+  const encryptedId = encryptDecisionId(gundemMaddesiId);
+  url.searchParams.set('KararId', encryptedId);
+  return url.toString();
+};
+
+const selectRowsByRange = ({ rows, allPages, startPage, endPage, startRow }) => {
+  const safeRows = Array.isArray(rows) ? rows : [];
+  const selected = [];
+  for (let index = 0; index < safeRows.length; index += 1) {
+    const row = safeRows[index];
+    const pageNo = Math.floor(index / EKAP_ROWS_PER_PAGE) + 1;
+    const rowNo = (index % EKAP_ROWS_PER_PAGE) + 1;
+
+    if (pageNo < startPage) continue;
+    if (!allPages && pageNo > endPage) continue;
+    if (pageNo === startPage && rowNo < startRow) continue;
+
+    selected.push({
+      pageNo,
+      rowNo,
+      raw: row,
+    });
+  }
+  return selected;
 };
 
 const normalizeTextKey = (value) =>
@@ -188,6 +439,29 @@ const retryWithPolicy = async ({
   throw new Error(`Retry policy exhausted: ${label}`);
 };
 
+const runWithConcurrency = async (items, maxConcurrent, task) => {
+  const list = Array.isArray(items) ? items : [];
+  if (!list.length) return [];
+  const limit = Math.max(1, toBoundedInt(maxConcurrent, 1, 1, list.length));
+  const results = new Array(list.length);
+  let cursor = 0;
+
+  const worker = async () => {
+    while (true) {
+      const currentIndex = cursor;
+      cursor += 1;
+      if (currentIndex >= list.length) {
+        return;
+      }
+      results[currentIndex] = await task(list[currentIndex], currentIndex);
+    }
+  };
+
+  const workers = Array.from({ length: limit }, () => worker());
+  await Promise.all(workers);
+  return results;
+};
+
 const loadJsonFileSafe = (filePath, fallback) => {
   try {
     const raw = fs.readFileSync(filePath, 'utf8');
@@ -203,6 +477,111 @@ const writeJsonFileAtomic = async (targetPath, payload) => {
   const tmpPath = `${targetPath}.tmp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   await fs.promises.writeFile(tmpPath, JSON.stringify(payload, null, 2), 'utf8');
   await fs.promises.rename(tmpPath, targetPath);
+};
+
+const resolveAutoTuneFilePath = ({ type, explicitPath }) => {
+  const cleanType = sanitizeFileName(type || 'default').replace(/\s+/g, '_');
+  const safeExplicit = String(explicitPath || '').trim();
+  if (safeExplicit) {
+    return path.resolve(safeExplicit);
+  }
+  return path.join(process.cwd(), '.autotune', `ekap-v3-${cleanType}.json`);
+};
+
+const loadAutoTuneProfile = (filePath) => {
+  const payload = loadJsonFileSafe(filePath, null);
+  if (!payload || typeof payload !== 'object') {
+    return null;
+  }
+  return payload;
+};
+
+const buildAutoTuneAdjustment = ({
+  autoTuneProfile,
+  workerCount,
+  chunkSize,
+  contextResetAfterJobs,
+  contextResetAfterPages,
+}) => {
+  const profile = autoTuneProfile && typeof autoTuneProfile === 'object' ? autoTuneProfile : null;
+  const last = profile?.last && typeof profile.last === 'object' ? profile.last : null;
+  if (!last) {
+    return {
+      applied: false,
+      reason: 'no-profile',
+      workerCount,
+      chunkSize,
+      contextResetAfterJobs,
+      contextResetAfterPages,
+    };
+  }
+
+  const failureRate = Math.max(0, Number(last.failureRate || 0));
+  const retryRate = Math.max(0, Number(last.retryRate || 0));
+  const rowsPerSecond = Math.max(0, Number(last.rowsPerSecond || 0));
+  const ewmaRowsPerSecond = Math.max(0, Number(profile?.ewmaRowsPerSecond || 0));
+  const unstable = failureRate >= 0.12 || retryRate >= 0.18 || Number(last.pageErrors || 0) > 0;
+  const stableThroughput = rowsPerSecond > 0 && (ewmaRowsPerSecond <= 0 || rowsPerSecond >= ewmaRowsPerSecond * 0.92);
+  const stable = failureRate <= 0.03 && retryRate <= 0.05 && stableThroughput;
+
+  let tunedWorkerCount = workerCount;
+  let tunedChunkSize = chunkSize;
+  let tunedContextResetAfterJobs = contextResetAfterJobs;
+  let tunedContextResetAfterPages = contextResetAfterPages;
+  let reason = 'no-change';
+
+  if (unstable) {
+    tunedWorkerCount = Math.max(1, workerCount - 1);
+    tunedChunkSize = Math.max(1, chunkSize - 1);
+    tunedContextResetAfterJobs = Math.max(4, Math.floor(contextResetAfterJobs * 0.8));
+    tunedContextResetAfterPages = Math.max(8, Math.floor(contextResetAfterPages * 0.8));
+    reason = 'stability-downshift';
+  } else if (stable) {
+    tunedWorkerCount = Math.min(16, workerCount + 1);
+    tunedChunkSize = Math.min(100, chunkSize + 1);
+    tunedContextResetAfterJobs = Math.min(200, Math.ceil(contextResetAfterJobs * 1.15));
+    tunedContextResetAfterPages = Math.min(1000, Math.ceil(contextResetAfterPages * 1.15));
+    reason = 'throughput-upshift';
+  }
+
+  const applied =
+    tunedWorkerCount !== workerCount ||
+    tunedChunkSize !== chunkSize ||
+    tunedContextResetAfterJobs !== contextResetAfterJobs ||
+    tunedContextResetAfterPages !== contextResetAfterPages;
+
+  return {
+    applied,
+    reason,
+    workerCount: tunedWorkerCount,
+    chunkSize: tunedChunkSize,
+    contextResetAfterJobs: tunedContextResetAfterJobs,
+    contextResetAfterPages: tunedContextResetAfterPages,
+  };
+};
+
+const persistAutoTuneProfile = async ({
+  filePath,
+  type,
+  metrics,
+  applied,
+  options,
+}) => {
+  const previous = loadAutoTuneProfile(filePath) || {};
+  const prevEwma = Math.max(0, Number(previous?.ewmaRowsPerSecond || 0));
+  const currentRps = Math.max(0, Number(metrics?.rowsPerSecond || 0));
+  const nextEwma = prevEwma > 0 ? prevEwma * 0.7 + currentRps * 0.3 : currentRps;
+
+  const payload = {
+    version: 1,
+    type,
+    updatedAt: new Date().toISOString(),
+    ewmaRowsPerSecond: Number(nextEwma.toFixed(4)),
+    last: metrics,
+    applied: applied && typeof applied === 'object' ? applied : null,
+    options: options && typeof options === 'object' ? options : null,
+  };
+  await writeJsonFileAtomic(filePath, payload);
 };
 
 const ensureDirWriteAccess = async (dirPath) => {
@@ -270,6 +649,28 @@ const ensurePdfExtension = (fileName, fallbackStem = 'ekap') => {
     return `${sanitizeFileName(fallbackStem) || 'ekap'}.pdf`;
   }
   return /\.pdf$/i.test(safe) ? safe : `${safe}.pdf`;
+};
+
+const createRunScopedFileNameAllocator = (runTag) => {
+  const counters = new Map();
+  const normalizedRunTag =
+    sanitizeFileName(String(runTag || '').trim() || createRunTag())
+      .replace(/\s+/g, '_')
+      .replace(/_+/g, '_') || createRunTag();
+
+  return ({ candidateFileName, fallbackStem = 'ekap' }) => {
+    const base = ensurePdfExtension(candidateFileName || `${fallbackStem}.pdf`, fallbackStem);
+    const parsed = path.parse(base);
+    const stem = sanitizeFileName(parsed.name || fallbackStem)
+      .replace(/\s+/g, '_')
+      .replace(/_+/g, '_') || 'ekap';
+    const ext = parsed.ext || '.pdf';
+    const key = `${stem.toLowerCase()}|${ext.toLowerCase()}`;
+    const current = counters.get(key) || 0;
+    counters.set(key, current + 1);
+    const suffix = current > 0 ? `_${String(current + 1).padStart(3, '0')}` : '';
+    return `${normalizedRunTag}_${stem}${suffix}${ext}`;
+  };
 };
 
 const buildFallbackFileNameFromMeta = (meta) => {
@@ -375,9 +776,11 @@ const downloadViaApiRequest = async ({
   popup,
   downloadButton,
   downloadsDir,
+  fileNameAllocator,
   meta,
   minDownloadBytes,
   enforcePdfHeader,
+  computeSha256,
 }) => {
   const spec = await extractApiDownloadSpecFromButton(downloadButton);
   if (!spec || !spec.url || spec.mode === 'UNKNOWN') {
@@ -430,8 +833,14 @@ const downloadViaApiRequest = async ({
   const contentDisposition = String(headers['content-disposition'] || '');
   const headerFileName = parseContentDispositionFileName(contentDisposition);
   const fallbackFileName = buildFallbackFileNameFromMeta(meta);
-  const targetName = ensurePdfExtension(headerFileName || fallbackFileName);
-  const targetPath = ensureUniquePath(downloadsDir, targetName);
+  const targetName =
+    typeof fileNameAllocator === 'function'
+      ? fileNameAllocator({
+          candidateFileName: headerFileName || fallbackFileName,
+          fallbackStem: 'ekap',
+        })
+      : ensurePdfExtension(headerFileName || fallbackFileName);
+  const targetPath = path.join(downloadsDir, targetName);
   await fs.promises.writeFile(targetPath, payload);
   await waitForStableFile(targetPath);
 
@@ -439,6 +848,7 @@ const downloadViaApiRequest = async ({
     targetPath,
     minDownloadBytes,
     enforcePdfHeader,
+    computeSha256,
   });
 
   return {
@@ -601,6 +1011,7 @@ const validateDownloadedFile = async ({
   targetPath,
   minDownloadBytes,
   enforcePdfHeader,
+  computeSha256,
 }) => {
   const fileName = path.basename(targetPath);
   const dirPath = path.dirname(targetPath);
@@ -643,7 +1054,8 @@ const validateDownloadedFile = async ({
     }
   }
 
-  const sha256 = await computeFileSha256(targetPath);
+  const shouldComputeSha256 = computeSha256 !== false;
+  const sha256 = shouldComputeSha256 ? await computeFileSha256(targetPath) : '';
   return {
     sizeBytes: stat.size,
     sha256,
@@ -758,8 +1170,15 @@ const createCheckpointManager = ({
   checkpointPath,
   enabled,
   runMeta,
+  flushEvery = DEFAULT_CHECKPOINT_FLUSH_EVERY,
+  flushIntervalMs = DEFAULT_CHECKPOINT_FLUSH_INTERVAL_MS,
 }) => {
   const active = Boolean(enabled && checkpointPath);
+  const safeFlushEvery = Math.max(1, toBoundedInt(flushEvery, DEFAULT_CHECKPOINT_FLUSH_EVERY, 1, 500));
+  const safeFlushIntervalMs = Math.max(
+    200,
+    toBoundedInt(flushIntervalMs, DEFAULT_CHECKPOINT_FLUSH_INTERVAL_MS, 200, 60_000),
+  );
   let state = {
     version: 1,
     runMeta: runMeta || {},
@@ -774,14 +1193,27 @@ const createCheckpointManager = ({
     },
   };
   let writeChain = Promise.resolve();
+  let pendingEvents = 0;
+  let lastPersistAt = Date.now();
 
   const persist = () => {
     if (!active) return writeChain;
     state.updatedAt = new Date().toISOString();
+    pendingEvents = 0;
+    lastPersistAt = Date.now();
     writeChain = writeChain
       .then(() => writeJsonFileAtomic(checkpointPath, state))
       .catch(() => {});
     return writeChain;
+  };
+
+  const schedulePersist = (force = false) => {
+    if (!active) return;
+    pendingEvents += 1;
+    const elapsed = Date.now() - lastPersistAt;
+    if (force || pendingEvents >= safeFlushEvery || elapsed >= safeFlushIntervalMs) {
+      void persist();
+    }
   };
 
   if (active) {
@@ -801,6 +1233,8 @@ const createCheckpointManager = ({
   return {
     enabled: active,
     path: checkpointPath,
+    flushEvery: safeFlushEvery,
+    flushIntervalMs: safeFlushIntervalMs,
     markProcessed({ pageNo, rowNo, success, duplicate, retryIncrement = 0 }) {
       if (!active) return;
       const page = toBoundedInt(pageNo, 0, 0);
@@ -827,7 +1261,7 @@ const createCheckpointManager = ({
       if (retryIncrement > 0) {
         state.totals.retries = toBoundedInt(state.totals.retries, 0, 0) + retryIncrement;
       }
-      void persist();
+      schedulePersist(false);
       console.log(
         `[CHECKPOINT] page=${page} row=${row} success=${success ? '1' : '0'} duplicate=${duplicate ? '1' : '0'}`,
       );
@@ -837,7 +1271,7 @@ const createCheckpointManager = ({
       const inc = toBoundedInt(count, 0, 0);
       if (inc <= 0) return;
       state.totals.retries = toBoundedInt(state.totals.retries, 0, 0) + inc;
-      void persist();
+      schedulePersist(false);
     },
     async finish(summary) {
       if (!active) return;
@@ -1071,10 +1505,12 @@ const clickDownloadInDetail = async ({
   context,
   popup,
   downloadsDir,
+  fileNameAllocator,
   downloadType,
   idempotencyStore,
   minDownloadBytes,
   enforcePdfHeader,
+  computeSha256,
   apiFirstDownload,
   apiFirstStrict,
 }) => {
@@ -1097,9 +1533,11 @@ const clickDownloadInDetail = async ({
           popup,
           downloadButton,
           downloadsDir,
+          fileNameAllocator,
           meta,
           minDownloadBytes,
           enforcePdfHeader,
+          computeSha256,
         });
         if (idempotencyStore) {
           const decisionKey = buildDecisionIdempotencyKey({
@@ -1147,8 +1585,14 @@ const clickDownloadInDetail = async ({
       });
     }
 
-    const targetName = sanitizeFileName(download.suggestedFilename() || `ekap-${Date.now()}.pdf`);
-    targetPath = ensureUniquePath(downloadsDir, targetName);
+    const targetName =
+      typeof fileNameAllocator === 'function'
+        ? fileNameAllocator({
+            candidateFileName: download.suggestedFilename() || `ekap-${Date.now()}.pdf`,
+            fallbackStem: 'ekap',
+          })
+        : sanitizeFileName(download.suggestedFilename() || `ekap-${Date.now()}.pdf`);
+    targetPath = path.join(downloadsDir, targetName);
     await download.saveAs(targetPath);
 
     const failure = await download.failure();
@@ -1161,6 +1605,7 @@ const clickDownloadInDetail = async ({
       targetPath,
       minDownloadBytes,
       enforcePdfHeader,
+      computeSha256,
     });
 
     if (idempotencyStore) {
@@ -1199,6 +1644,7 @@ const processCurrentPageRows = async ({
   context,
   page,
   downloadsDir,
+  fileNameAllocator,
   pageNo,
   retryPolicy,
   startRow,
@@ -1207,6 +1653,7 @@ const processCurrentPageRows = async ({
   downloadType,
   minDownloadBytes,
   enforcePdfHeader,
+  computeSha256,
   apiFirstDownload,
   apiFirstStrict,
 }) => {
@@ -1255,10 +1702,12 @@ const processCurrentPageRows = async ({
               context,
               popup,
               downloadsDir,
+              fileNameAllocator,
               downloadType,
               idempotencyStore,
               minDownloadBytes,
               enforcePdfHeader,
+              computeSha256,
               apiFirstDownload,
               apiFirstStrict,
             });
@@ -1369,8 +1818,8 @@ const moveToNextPage = async (page, currentPage) => {
   return true;
 };
 
-const launchBrowserContext = async (userDataDir, isHeadless) =>
-  chromium.launchPersistentContext(userDataDir, {
+const launchBrowserContext = async (userDataDir, isHeadless, blockResources = DEFAULT_BLOCK_RESOURCES) => {
+  const context = await chromium.launchPersistentContext(userDataDir, {
     headless: isHeadless,
     acceptDownloads: true,
     args: [
@@ -1379,6 +1828,25 @@ const launchBrowserContext = async (userDataDir, isHeadless) =>
       '--allow-running-insecure-content',
     ],
   });
+
+  if (blockResources) {
+    await context.route('**/*', (route) => {
+      const request = route.request();
+      const resourceType = String(request.resourceType() || '').toLowerCase();
+      const url = String(request.url() || '').toLowerCase();
+
+      if (BLOCKED_RESOURCE_TYPES.has(resourceType)) {
+        return route.abort();
+      }
+      if (BLOCKED_URL_PATTERNS.some((pattern) => url.includes(pattern))) {
+        return route.abort();
+      }
+      return route.continue();
+    });
+  }
+
+  return context;
+};
 
 const setupSearchPage = async ({ context, cfg, fromDate, toDate, dateInputIndex, retryPolicy }) => {
   const page = context.pages()[0] || (await context.newPage());
@@ -1448,6 +1916,7 @@ const processPagesFromCurrent = async ({
   context,
   page,
   downloadsDir,
+  fileNameAllocator,
   retryPolicy,
   currentPage,
   allPages,
@@ -1459,6 +1928,7 @@ const processPagesFromCurrent = async ({
   downloadType,
   minDownloadBytes,
   enforcePdfHeader,
+  computeSha256,
   apiFirstDownload,
   apiFirstStrict,
 }) => {
@@ -1480,6 +1950,7 @@ const processPagesFromCurrent = async ({
         context,
         page,
         downloadsDir,
+        fileNameAllocator,
         pageNo: pageCursor,
         retryPolicy,
         startRow: nextStartRow,
@@ -1488,6 +1959,7 @@ const processPagesFromCurrent = async ({
         downloadType,
         minDownloadBytes,
         enforcePdfHeader,
+        computeSha256,
         apiFirstDownload,
         apiFirstStrict,
       });
@@ -1731,6 +2203,41 @@ const createAdaptiveConcurrencyController = ({
   };
 };
 
+const shouldRunContextReset = ({
+  sinceReset,
+  softLimit,
+  hardFactor = DEFAULT_CONTEXT_RESET_HARD_FACTOR,
+  unstable,
+}) => {
+  const safeSoft = Math.max(1, toBoundedInt(softLimit, 1, 1, 50_000));
+  const safeHardFactor = Math.max(2, toBoundedInt(hardFactor, DEFAULT_CONTEXT_RESET_HARD_FACTOR, 2, 12));
+  const hardLimit = Math.max(safeSoft + 1, safeSoft * safeHardFactor);
+  const count = Math.max(0, toBoundedInt(sinceReset, 0, 0, 1_000_000));
+
+  if (count >= hardLimit) {
+    return {
+      reset: true,
+      reason: `hard-limit(${hardLimit})`,
+      hardLimit,
+      softLimit: safeSoft,
+    };
+  }
+  if (count >= safeSoft && unstable) {
+    return {
+      reset: true,
+      reason: `soft-limit-unstable(${safeSoft})`,
+      hardLimit,
+      softLimit: safeSoft,
+    };
+  }
+  return {
+    reset: false,
+    reason: '',
+    hardLimit,
+    softLimit: safeSoft,
+  };
+};
+
 const runSingleWorker = async ({
   cfg,
   fromDate,
@@ -1742,15 +2249,20 @@ const runSingleWorker = async ({
   allPages,
   retryPolicy,
   isHeadless,
+  blockResources,
   downloadsDir,
+  fileNameAllocator,
   idempotencyStore,
   checkpointManager,
   downloadType,
   minDownloadBytes,
   enforcePdfHeader,
+  computeSha256,
   apiFirstDownload,
   apiFirstStrict,
   contextResetAfterPages,
+  contextResetHardFactor = DEFAULT_CONTEXT_RESET_HARD_FACTOR,
+  logLabel = '',
 }) => {
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ekapv2-chrome-'));
   let context;
@@ -1758,6 +2270,7 @@ const runSingleWorker = async ({
   let currentPage = 1;
   let nextStartRow = Math.max(1, toBoundedInt(startRow, 1, 1));
   let pagesSinceReset = 0;
+  const labelSuffix = logLabel ? ` [${logLabel}]` : '';
 
   const totals = {
     downloaded: 0,
@@ -1774,7 +2287,7 @@ const runSingleWorker = async ({
       context = null;
       page = null;
     }
-    context = await launchBrowserContext(userDataDir, isHeadless);
+    context = await launchBrowserContext(userDataDir, isHeadless, blockResources);
     page = await setupSearchPage({ context, cfg, fromDate, toDate, dateInputIndex, retryPolicy });
     currentPage = 1;
   };
@@ -1797,17 +2310,19 @@ const runSingleWorker = async ({
         context,
         page,
         downloadsDir,
+        fileNameAllocator,
         retryPolicy,
         currentPage,
         allPages: false,
         endPage: chunkEndPage,
-        workerId: null,
+        workerId: logLabel || null,
         startRow: nextStartRow,
         idempotencyStore,
         checkpointManager,
         downloadType,
         minDownloadBytes,
         enforcePdfHeader,
+        computeSha256,
         apiFirstDownload,
         apiFirstStrict,
       });
@@ -1822,25 +2337,33 @@ const runSingleWorker = async ({
       nextStartRow = 1;
 
       if (stats.noMorePages) {
-        console.log('No more pages. Finished.');
+        console.log(`No more pages. Finished.${labelSuffix}`);
         break;
       }
 
       if (!allPages && stats.reachedEndPage && currentPage >= endPage) {
-        console.log('Reached endPage. Finished.');
+        console.log(`Reached endPage. Finished.${labelSuffix}`);
         break;
       }
 
       const moved = await moveToNextPage(page, currentPage);
       if (!moved) {
-        console.log('No more pages. Finished.');
+        console.log(`No more pages. Finished.${labelSuffix}`);
         break;
       }
       await waitGridReady(page);
       currentPage += 1;
 
-      if (pagesSinceReset >= contextResetAfterPages) {
-        console.log(`[POOL] single-worker periodic context reset after ${pagesSinceReset} pages.`);
+      const resetPlan = shouldRunContextReset({
+        sinceReset: pagesSinceReset,
+        softLimit: contextResetAfterPages,
+        hardFactor: contextResetHardFactor,
+        unstable: stats.retries > 0 || stats.pageErrors > 0 || stats.failed > 0,
+      });
+      if (resetPlan.reset) {
+        console.log(
+          `[POOL] single-worker context reset after ${pagesSinceReset} pages reason=${resetPlan.reason}.${labelSuffix}`,
+        );
         pagesSinceReset = 0;
         const targetPage = currentPage;
         await resetSession();
@@ -1871,15 +2394,19 @@ const runQueueWorker = async ({
   dateInputIndex,
   retryPolicy,
   isHeadless,
+  blockResources,
   downloadsDir,
+  fileNameAllocator,
   idempotencyStore,
   checkpointManager,
   downloadType,
   minDownloadBytes,
   enforcePdfHeader,
+  computeSha256,
   apiFirstDownload,
   apiFirstStrict,
   contextResetAfterJobs,
+  contextResetHardFactor = DEFAULT_CONTEXT_RESET_HARD_FACTOR,
 }) => {
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), `ekapv2-chrome-w${workerId}-`));
   let context;
@@ -1903,7 +2430,7 @@ const runQueueWorker = async ({
       page = null;
     }
 
-    context = await launchBrowserContext(userDataDir, isHeadless);
+    context = await launchBrowserContext(userDataDir, isHeadless, blockResources);
     page = await setupSearchPage({ context, cfg, fromDate, toDate, dateInputIndex, retryPolicy });
     currentPage = 1;
   };
@@ -1951,6 +2478,7 @@ const runQueueWorker = async ({
           context,
           page,
           downloadsDir,
+          fileNameAllocator,
           retryPolicy,
           currentPage,
           allPages: false,
@@ -1962,6 +2490,7 @@ const runQueueWorker = async ({
           downloadType,
           minDownloadBytes,
           enforcePdfHeader,
+          computeSha256,
           apiFirstDownload,
           apiFirstStrict,
         });
@@ -1981,8 +2510,16 @@ const runQueueWorker = async ({
           shouldBreak = true;
         }
 
-        if (!shouldBreak && jobsSinceReset >= contextResetAfterJobs && queue.remainingJobs() > 0) {
-          console.log(`[POOL] worker=${workerId} periodic context reset after ${jobsSinceReset} jobs.`);
+        const resetPlan = shouldRunContextReset({
+          sinceReset: jobsSinceReset,
+          softLimit: contextResetAfterJobs,
+          hardFactor: contextResetHardFactor,
+          unstable: stats.retries > 0 || stats.pageErrors > 0 || stats.failed > 0,
+        });
+        if (!shouldBreak && resetPlan.reset && queue.remainingJobs() > 0) {
+          console.log(
+            `[POOL] worker=${workerId} context reset after ${jobsSinceReset} jobs reason=${resetPlan.reason}.`,
+          );
           jobsSinceReset = 0;
           await resetSession();
         }
@@ -2036,14 +2573,18 @@ const runWorkerPool = async ({
   dateInputIndex,
   retryPolicy,
   isHeadless,
+  blockResources,
   downloadsDir,
+  fileNameAllocator,
   idempotencyStore,
   checkpointManager,
   downloadType,
   minDownloadBytes,
   enforcePdfHeader,
+  computeSha256,
   apiFirstDownload,
   apiFirstStrict,
+  contextResetHardFactor = DEFAULT_CONTEXT_RESET_HARD_FACTOR,
 }) => {
   const jobs = buildPageJobs(startPage, endPage, chunkSize);
   const queue = createPageJobQueue(jobs);
@@ -2072,15 +2613,19 @@ const runWorkerPool = async ({
       dateInputIndex,
       retryPolicy,
       isHeadless,
+      blockResources,
       downloadsDir,
+      fileNameAllocator,
       idempotencyStore,
       checkpointManager,
       downloadType,
       minDownloadBytes,
       enforcePdfHeader,
+      computeSha256,
       apiFirstDownload,
       apiFirstStrict,
       contextResetAfterJobs,
+      contextResetHardFactor,
     }),
   );
 
@@ -2115,6 +2660,180 @@ const runWorkerPool = async ({
   }
 
   return summary;
+};
+
+const getRowValue = (row, keys) => {
+  const safeRow = row && typeof row === 'object' ? row : {};
+  for (const key of keys) {
+    if (!key) continue;
+    const value = safeRow[key];
+    if (value === null || value === undefined) continue;
+    const text = String(value).trim();
+    if (text) return text;
+  }
+  return '';
+};
+
+const runApiFirstListMode = async ({
+  type,
+  fromDate,
+  toDate,
+  startPage,
+  startRow,
+  endPage,
+  allPages,
+  retryPolicy,
+  isHeadless,
+  blockResources,
+  downloadsDir,
+  fileNameAllocator,
+  checkpointManager,
+  downloadType,
+  minDownloadBytes,
+  enforcePdfHeader,
+  computeSha256,
+  apiFirstDownload,
+  apiFirstStrict,
+  logLabel = '',
+}) => {
+  const labelSuffix = logLabel ? ` [${logLabel}]` : '';
+  const rows = await fetchDecisionRows({ type, fromDate, toDate });
+  const totalPages = Math.ceil(rows.length / EKAP_ROWS_PER_PAGE);
+  const selectedRows = selectRowsByRange({
+    rows,
+    allPages,
+    startPage,
+    endPage,
+    startRow,
+  });
+  const baseUrl = await fetchDecisionBaseUrl({ type });
+
+  console.log(
+    `[API-LIST] sourceRows=${rows.length} selectedRows=${selectedRows.length} totalPages=${totalPages}${labelSuffix}`,
+  );
+  if (!selectedRows.length) {
+    console.log(`No more pages. Finished.${labelSuffix}`);
+    return {
+      downloaded: 0,
+      failed: 0,
+      retries: 0,
+      duplicates: 0,
+      pageErrors: 0,
+      workerFatalErrors: 0,
+    };
+  }
+
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ekapv2-api-list-'));
+  let context;
+  let detailPage;
+  let currentPage = 0;
+  let downloaded = 0;
+  let failed = 0;
+  let retries = 0;
+
+  try {
+    context = await launchBrowserContext(userDataDir, isHeadless, blockResources);
+    detailPage = context.pages()[0] || (await context.newPage());
+
+    for (const item of selectedRows) {
+      if (item.pageNo !== currentPage) {
+        currentPage = item.pageNo;
+        console.log(`Processing page ${item.pageNo}${labelSuffix}`);
+      }
+
+      const row = item.raw && typeof item.raw === 'object' ? item.raw : {};
+      const gundemMaddesiId = getRowValue(row, ['gundemMaddesiId', 'GundemMaddesiId']);
+      if (!gundemMaddesiId) {
+        failed += 1;
+        checkpointManager?.markProcessed({
+          pageNo: item.pageNo,
+          rowNo: item.rowNo,
+          success: false,
+          duplicate: false,
+        });
+        console.error(`Page ${item.pageNo}, row ${item.rowNo}: failed -> gundemMaddesiId is empty`);
+        continue;
+      }
+
+      try {
+        const result = await retryWithPolicy({
+          label: `api-list page=${item.pageNo} row=${item.rowNo}`,
+          maxAttempts: retryPolicy.maxAttempts,
+          baseDelayMs: retryPolicy.baseDelayMs,
+          maxDelayMs: retryPolicy.maxDelayMs,
+          jitterRatio: retryPolicy.jitterRatio,
+          shouldRetry: (error) => isRetryableBrowserError(error),
+          onRetry: ({ attempt, maxAttempts, delayMs, error }) => {
+            retries += 1;
+            checkpointManager?.markRetry(1);
+            console.warn(
+              `Page ${item.pageNo}, row ${item.rowNo}: retry ${attempt}/${maxAttempts - 1} in ${delayMs}ms -> ${
+                error.message
+              }`,
+            );
+          },
+          task: async () => {
+            const detailUrl = buildDecisionDetailUrl({
+              baseUrl,
+              gundemMaddesiId,
+            });
+            await detailPage.goto(detailUrl, { waitUntil: 'domcontentloaded', timeout: 35_000 });
+            return clickDownloadInDetail({
+              context,
+              popup: detailPage,
+              downloadsDir,
+              fileNameAllocator,
+              downloadType,
+              idempotencyStore: null,
+              minDownloadBytes,
+              enforcePdfHeader,
+              computeSha256,
+              apiFirstDownload,
+              apiFirstStrict,
+            });
+          },
+        });
+
+        downloaded += 1;
+        checkpointManager?.markProcessed({
+          pageNo: item.pageNo,
+          rowNo: item.rowNo,
+          success: true,
+          duplicate: false,
+        });
+        console.log(
+          `Page ${item.pageNo}, row ${item.rowNo}: downloaded. transport=${result?.transport || 'unknown'} size=${
+            result?.sizeBytes || 0
+          } sha256=${result?.sha256 || '-'}`,
+        );
+      } catch (error) {
+        failed += 1;
+        checkpointManager?.markProcessed({
+          pageNo: item.pageNo,
+          rowNo: item.rowNo,
+          success: false,
+          duplicate: false,
+        });
+        console.error(`Page ${item.pageNo}, row ${item.rowNo}: failed -> ${error.message}`);
+      }
+
+      await sleep(120);
+    }
+  } finally {
+    if (context) {
+      await context.close().catch(() => {});
+    }
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+
+  return {
+    downloaded,
+    failed,
+    retries,
+    duplicates: 0,
+    pageErrors: 0,
+    workerFatalErrors: 0,
+  };
 };
 
 async function runEkapDownloader(config) {
@@ -2183,20 +2902,52 @@ async function runEkapDownloader(config) {
     throw new Error(`Invalid browserMode: ${browserMode}. Use "headless" or "visible".`);
   }
   const isHeadless = browserMode ? browserMode === 'headless' : legacyHeadlessArg === 'true';
+  const blockResources = toBoolArg(
+    getArg('blockResources', process.env.BLOCK_RESOURCES || (DEFAULT_BLOCK_RESOURCES ? 'true' : 'false')),
+    DEFAULT_BLOCK_RESOURCES,
+  );
 
-  const workerCount = toBoundedInt(getArg('workerCount', process.env.WORKER_COUNT || '1'), 1, 1, 16);
-  const chunkSize = toBoundedInt(getArg('jobChunkSize', process.env.JOB_CHUNK_SIZE || '1'), 1, 1, 100);
-  const contextResetAfterJobs = toBoundedInt(
+  let workerCount = toBoundedInt(getArg('workerCount', process.env.WORKER_COUNT || '1'), 1, 1, 16);
+  let chunkSize = toBoundedInt(getArg('jobChunkSize', process.env.JOB_CHUNK_SIZE || '1'), 1, 1, 100);
+  const dateShardEnabledArg = toBoolArg(
+    getArg('dateShardEnabled', process.env.DATE_SHARD_ENABLED || 'false'),
+    false,
+  );
+  const dateShardDays = toBoundedInt(
+    getArg('dateShardDays', process.env.DATE_SHARD_DAYS || String(DEFAULT_DATE_SHARD_DAYS)),
+    DEFAULT_DATE_SHARD_DAYS,
+    1,
+    62,
+  );
+  const dateShardMinSpanDays = toBoundedInt(
+    getArg('dateShardMinSpanDays', process.env.DATE_SHARD_MIN_SPAN_DAYS || String(DEFAULT_DATE_SHARD_MIN_SPAN_DAYS)),
+    DEFAULT_DATE_SHARD_MIN_SPAN_DAYS,
+    2,
+    366,
+  );
+  const dateShardParallelRaw = toBoundedInt(
+    getArg('dateShardParallel', process.env.DATE_SHARD_PARALLEL || String(workerCount)),
+    workerCount,
+    1,
+    16,
+  );
+  let contextResetAfterJobs = toBoundedInt(
     getArg('contextResetAfterJobs', process.env.CONTEXT_RESET_AFTER_JOBS || '12'),
     12,
     1,
     200,
   );
-  const contextResetAfterPages = toBoundedInt(
+  let contextResetAfterPages = toBoundedInt(
     getArg('contextResetAfterPages', process.env.CONTEXT_RESET_AFTER_PAGES || '20'),
     20,
     1,
     1000,
+  );
+  const contextResetHardFactor = toBoundedInt(
+    getArg('contextResetHardFactor', process.env.CONTEXT_RESET_HARD_FACTOR || String(DEFAULT_CONTEXT_RESET_HARD_FACTOR)),
+    DEFAULT_CONTEXT_RESET_HARD_FACTOR,
+    2,
+    12,
   );
   const adaptiveConcurrency = toBoolArg(
     getArg('adaptiveConcurrency', process.env.ADAPTIVE_CONCURRENCY || 'true'),
@@ -2209,8 +2960,38 @@ async function runEkapDownloader(config) {
     50 * 1024 * 1024,
   );
   const enforcePdfHeader = toBoolArg(getArg('enforcePdfHeader', process.env.ENFORCE_PDF_HEADER || 'true'), true);
+  const fastMode = toBoolArg(getArg('fastMode', process.env.FAST_MODE || 'false'), false);
+  const computeSha256 = toBoolArg(
+    getArg('computeSha256', process.env.COMPUTE_SHA256 || (fastMode ? 'false' : 'true')),
+    !fastMode,
+  );
   const apiFirstDownload = toBoolArg(getArg('apiFirstDownload', process.env.API_FIRST_DOWNLOAD || 'true'), true);
   const apiFirstStrict = toBoolArg(getArg('apiFirstStrict', process.env.API_FIRST_STRICT || 'false'), false);
+  const apiFirstList = toBoolArg(getArg('apiFirstList', process.env.API_FIRST_LIST || 'true'), true);
+  const apiFirstListStrict = toBoolArg(
+    getArg('apiFirstListStrict', process.env.API_FIRST_LIST_STRICT || 'false'),
+    false,
+  );
+  const autoTune = toBoolArg(
+    getArg('autoTune', process.env.AUTO_TUNE || (DEFAULT_AUTO_TUNE ? 'true' : 'false')),
+    DEFAULT_AUTO_TUNE,
+  );
+  const autoTuneFileArg = String(getArg('autoTuneFile', process.env.AUTO_TUNE_FILE || '')).trim();
+  const checkpointFlushEvery = toBoundedInt(
+    getArg('checkpointFlushEvery', process.env.CHECKPOINT_FLUSH_EVERY || String(DEFAULT_CHECKPOINT_FLUSH_EVERY)),
+    DEFAULT_CHECKPOINT_FLUSH_EVERY,
+    1,
+    500,
+  );
+  const checkpointFlushIntervalMs = toBoundedInt(
+    getArg(
+      'checkpointFlushIntervalMs',
+      process.env.CHECKPOINT_FLUSH_INTERVAL_MS || String(DEFAULT_CHECKPOINT_FLUSH_INTERVAL_MS),
+    ),
+    DEFAULT_CHECKPOINT_FLUSH_INTERVAL_MS,
+    200,
+    60_000,
+  );
   const checkpointPath = String(getArg('checkpointPath', process.env.CHECKPOINT_PATH || '')).trim();
   const checkpointEnabled = toBoolArg(getArg('checkpoint', process.env.CHECKPOINT_ENABLED || 'true'), true);
   const resetCheckpoint = toBoolArg(getArg('resetCheckpoint', process.env.RESET_CHECKPOINT || 'false'), false);
@@ -2219,23 +3000,81 @@ async function runEkapDownloader(config) {
   if (!type) {
     throw new Error('downloadType is required.');
   }
+  const runTagRaw = String(getArg('runTag', process.env.RUN_TAG || '')).trim();
+  const runTag = sanitizeFileName(runTagRaw || createRunTag())
+    .replace(/\s+/g, '_')
+    .replace(/_+/g, '_');
+
+  const autoTuneFilePath = resolveAutoTuneFilePath({
+    type,
+    explicitPath: autoTuneFileArg,
+  });
+  const autoTuneProfile = autoTune ? loadAutoTuneProfile(autoTuneFilePath) : null;
+  const autoTuneAdjustment = autoTune
+    ? buildAutoTuneAdjustment({
+        autoTuneProfile,
+        workerCount,
+        chunkSize,
+        contextResetAfterJobs,
+        contextResetAfterPages,
+      })
+    : {
+        applied: false,
+        reason: 'disabled',
+        workerCount,
+        chunkSize,
+        contextResetAfterJobs,
+        contextResetAfterPages,
+      };
+  if (autoTuneAdjustment.applied) {
+    workerCount = autoTuneAdjustment.workerCount;
+    chunkSize = autoTuneAdjustment.chunkSize;
+    contextResetAfterJobs = autoTuneAdjustment.contextResetAfterJobs;
+    contextResetAfterPages = autoTuneAdjustment.contextResetAfterPages;
+  }
 
   const downloadsDir = path.join(process.cwd(), 'indirilenler', type);
   await ensureDirWriteAccess(downloadsDir);
+  const fileNameAllocator = createRunScopedFileNameAllocator(runTag);
 
   const idempotencyStore = null;
+  const shardBase = buildDateShards({
+    fromDate,
+    toDate,
+    shardDays: dateShardDays,
+  });
+  const shardEligible = dateShardEnabledArg && allPages && startRow <= 1;
+  const shardEnabled =
+    shardEligible &&
+    shardBase.spanDays >= dateShardMinSpanDays &&
+    shardBase.shards.length > 1 &&
+    dateShardParallelRaw > 1;
+  const shardParallel = shardEnabled ? Math.min(dateShardParallelRaw, shardBase.shards.length) : 1;
+  const shardList = shardEnabled
+    ? shardBase.shards
+    : [
+        {
+          index: 1,
+          fromDate,
+          toDate,
+          spanDays: shardBase.spanDays,
+        },
+      ];
+  const checkpointActive = checkpointEnabled && !shardEnabled;
 
   if (resetCheckpoint && checkpointPath) {
     await fs.promises.unlink(checkpointPath).catch(() => {});
   }
   const checkpointManager = createCheckpointManager({
     checkpointPath,
-    enabled: checkpointEnabled,
+    enabled: checkpointActive,
     runMeta: {
       type,
       fromDate,
       toDate,
     },
+    flushEvery: checkpointFlushEvery,
+    flushIntervalMs: checkpointFlushIntervalMs,
   });
 
   const effectiveWorkerCount = allPages || startRow > 1 ? 1 : workerCount;
@@ -2245,83 +3084,311 @@ async function runEkapDownloader(config) {
   console.log(
     `Page range: ${allPages ? `${startPage} -> TUMU` : `${startPage} -> ${endPage}`} (startRow=${startRow})`,
   );
+  console.log(`Run tag: ${runTag}`);
   console.log(`Browser mode: ${isHeadless ? 'headless' : 'visible'}`);
+  console.log(`Resource blocking: ${blockResources ? 'on' : 'off'}`);
+  console.log(
+    `Auto tune: ${autoTune ? 'on' : 'off'} profile=${autoTune ? autoTuneFilePath : '-'} reason=${
+      autoTuneAdjustment.reason
+    }`,
+  );
+  if (autoTuneAdjustment.applied) {
+    console.log(
+      `[AUTO-TUNE] applied workerCount=${workerCount} chunkSize=${chunkSize} resetJobs=${contextResetAfterJobs} resetPages=${contextResetAfterPages}`,
+    );
+  }
   console.log(`Retry policy: attempts=${retryPolicy.maxAttempts} base=${retryPolicy.baseDelayMs}ms max=${retryPolicy.maxDelayMs}ms jitter=${retryPolicy.jitterRatio}`);
   console.log(`Worker count: ${effectiveWorkerCount}`);
   console.log(`Job chunk size: ${chunkSize}`);
-  console.log(`Context reset: jobs=${contextResetAfterJobs} pages=${contextResetAfterPages}`);
+  console.log(
+    `Context reset: jobs=${contextResetAfterJobs} pages=${contextResetAfterPages} hardFactor=${contextResetHardFactor}`,
+  );
   console.log(`Adaptive concurrency: ${adaptiveConcurrency && effectiveWorkerCount > 1 ? 'on' : 'off'}`);
-  console.log(`Download validation: minBytes=${minDownloadBytes} pdfHeader=${enforcePdfHeader ? 'on' : 'off'}`);
+  console.log(
+    `Download validation: minBytes=${minDownloadBytes} pdfHeader=${enforcePdfHeader ? 'on' : 'off'} sha256=${
+      computeSha256 ? 'on' : 'off'
+    } fastMode=${fastMode ? 'on' : 'off'}`,
+  );
   console.log(`API-first download: enabled=${apiFirstDownload ? 'on' : 'off'} strict=${apiFirstStrict ? 'on' : 'off'}`);
+  console.log(`API-first list: enabled=${apiFirstList ? 'on' : 'off'} strict=${apiFirstListStrict ? 'on' : 'off'}`);
   console.log('Duplicate control: off (all rows will be downloaded)');
+  if (shardEnabled) {
+    console.log(
+      `Date sharding: enabled spanDays=${shardBase.spanDays} shardDays=${shardBase.shardDays} shards=${shardList.length} parallel=${shardParallel}`,
+    );
+  } else {
+    console.log(
+      `Date sharding: off requested=${dateShardEnabledArg ? 'on' : 'off'} spanDays=${shardBase.spanDays} minSpan=${dateShardMinSpanDays} parallel=${dateShardParallelRaw}`,
+    );
+  }
   if (checkpointManager.enabled) {
-    console.log(`Checkpoint: ${checkpointManager.path}`);
+    console.log(
+      `Checkpoint: ${checkpointManager.path} flushEvery=${checkpointManager.flushEvery} flushIntervalMs=${checkpointManager.flushIntervalMs}`,
+    );
     const last = checkpointManager.getLastSuccess();
     if (last) {
       console.log(`[CHECKPOINT] loaded lastSuccess page=${last.page} row=${last.row}`);
     }
   } else {
     console.log('Checkpoint: disabled');
+    if (checkpointEnabled && shardEnabled) {
+      console.warn('[CHECKPOINT] disabled because date sharding is enabled.');
+    }
   }
-  if (allPages && workerCount > 1) {
+  if (allPages && workerCount > 1 && !shardEnabled) {
     console.warn('[POOL] allPages=true oldugu icin worker havuzu kapatildi (single worker).');
   }
   if (startRow > 1 && workerCount > 1) {
     console.warn('[POOL] startRow>1 oldugu icin worker havuzu kapatildi (single worker).');
   }
+  if (apiFirstList && !shardEnabled && (allPages || startRow > 1 || workerCount > 1)) {
+    console.warn('[API-LIST] liste modu tek worker akisiyla calisir; worker havuzu devre disi.');
+  }
 
   let summary = null;
   let runError = null;
+  const runStartedAtMs = Date.now();
+  const summarizeStatsList = (list) =>
+    (Array.isArray(list) ? list : []).reduce(
+      (acc, item) => {
+        acc.downloaded += item?.downloaded || 0;
+        acc.failed += item?.failed || 0;
+        acc.retries += item?.retries || 0;
+        acc.duplicates += item?.duplicates || 0;
+        acc.pageErrors += item?.pageErrors || 0;
+        acc.workerFatalErrors += item?.workerFatalErrors || 0;
+        return acc;
+      },
+      {
+        downloaded: 0,
+        failed: 0,
+        retries: 0,
+        duplicates: 0,
+        pageErrors: 0,
+        workerFatalErrors: 0,
+      },
+    );
+
+  const runLegacyUiFlow = async () => {
+    if (shardEnabled) {
+      const shardResults = await runWithConcurrency(shardList, shardParallel, async (shard, index) => {
+        const shardNo = index + 1;
+        const label = `shard-${shardNo}`;
+        console.log(`[SHARD] start ${shardNo}/${shardList.length} range=${shard.fromDate}->${shard.toDate}`);
+        const stats = await runSingleWorker({
+          cfg,
+          fromDate: shard.fromDate,
+          toDate: shard.toDate,
+          dateInputIndex,
+          startPage: 1,
+          startRow: 1,
+          endPage: 1,
+          allPages: true,
+          retryPolicy,
+          isHeadless,
+          blockResources,
+          downloadsDir,
+          fileNameAllocator,
+          idempotencyStore,
+          checkpointManager,
+          downloadType: type,
+          minDownloadBytes,
+          enforcePdfHeader,
+          computeSha256,
+          apiFirstDownload,
+          apiFirstStrict,
+          contextResetAfterPages,
+          contextResetHardFactor,
+          logLabel: label,
+        });
+        console.log(
+          `[SHARD] done ${shardNo}/${shardList.length} range=${shard.fromDate}->${shard.toDate} downloaded=${stats.downloaded} failed=${stats.failed} retries=${stats.retries}`,
+        );
+        return stats;
+      });
+      return summarizeStatsList(shardResults);
+    }
+
+    return effectiveWorkerCount > 1
+      ? runWorkerPool({
+          workerCount: effectiveWorkerCount,
+          chunkSize,
+          adaptiveConcurrencyEnabled: adaptiveConcurrency,
+          contextResetAfterJobs,
+          startPage,
+          endPage,
+          cfg,
+          fromDate,
+          toDate,
+          dateInputIndex,
+          retryPolicy,
+          isHeadless,
+          blockResources,
+          downloadsDir,
+          fileNameAllocator,
+          idempotencyStore,
+          checkpointManager,
+          downloadType: type,
+          minDownloadBytes,
+          enforcePdfHeader,
+          computeSha256,
+          apiFirstDownload,
+          apiFirstStrict,
+          contextResetHardFactor,
+        })
+      : runSingleWorker({
+          cfg,
+          fromDate,
+          toDate,
+          dateInputIndex,
+          startPage,
+          startRow,
+          endPage,
+          allPages,
+          retryPolicy,
+          isHeadless,
+          blockResources,
+          downloadsDir,
+          fileNameAllocator,
+          idempotencyStore,
+          checkpointManager,
+          downloadType: type,
+          minDownloadBytes,
+          enforcePdfHeader,
+          computeSha256,
+          apiFirstDownload,
+          apiFirstStrict,
+          contextResetAfterPages,
+          contextResetHardFactor,
+        });
+  };
+
+  const runApiFirstListFlow = async () => {
+    if (shardEnabled) {
+      const shardResults = await runWithConcurrency(shardList, shardParallel, async (shard, index) => {
+        const shardNo = index + 1;
+        const label = `shard-${shardNo}`;
+        console.log(`[SHARD] start ${shardNo}/${shardList.length} range=${shard.fromDate}->${shard.toDate}`);
+        const stats = await runApiFirstListMode({
+          type,
+          fromDate: shard.fromDate,
+          toDate: shard.toDate,
+          startPage: 1,
+          startRow: 1,
+          endPage: 1,
+          allPages: true,
+          retryPolicy,
+          isHeadless,
+          blockResources,
+          downloadsDir,
+          fileNameAllocator,
+          checkpointManager,
+          downloadType: type,
+          minDownloadBytes,
+          enforcePdfHeader,
+          computeSha256,
+          apiFirstDownload,
+          apiFirstStrict,
+          logLabel: label,
+        });
+        console.log(
+          `[SHARD] done ${shardNo}/${shardList.length} range=${shard.fromDate}->${shard.toDate} downloaded=${stats.downloaded} failed=${stats.failed} retries=${stats.retries}`,
+        );
+        return stats;
+      });
+      return summarizeStatsList(shardResults);
+    }
+
+    return runApiFirstListMode({
+      type,
+      fromDate,
+      toDate,
+      startPage,
+      startRow,
+      endPage,
+      allPages,
+      retryPolicy,
+      isHeadless,
+      blockResources,
+      downloadsDir,
+      fileNameAllocator,
+      checkpointManager,
+      downloadType: type,
+      minDownloadBytes,
+      enforcePdfHeader,
+      computeSha256,
+      apiFirstDownload,
+      apiFirstStrict,
+    });
+  };
+
   try {
-    summary =
-      effectiveWorkerCount > 1
-        ? await runWorkerPool({
-            workerCount: effectiveWorkerCount,
-            chunkSize,
-            adaptiveConcurrencyEnabled: adaptiveConcurrency,
-            contextResetAfterJobs,
-            startPage,
-            endPage,
-            cfg,
-            fromDate,
-            toDate,
-            dateInputIndex,
-            retryPolicy,
-            isHeadless,
-            downloadsDir,
-            idempotencyStore,
-            checkpointManager,
-            downloadType: type,
-            minDownloadBytes,
-            enforcePdfHeader,
-            apiFirstDownload,
-            apiFirstStrict,
-          })
-        : await runSingleWorker({
-            cfg,
-            fromDate,
-            toDate,
-            dateInputIndex,
-            startPage,
-            startRow,
-            endPage,
-            allPages,
-            retryPolicy,
-            isHeadless,
-            downloadsDir,
-            idempotencyStore,
-            checkpointManager,
-            downloadType: type,
-            minDownloadBytes,
-            enforcePdfHeader,
-            apiFirstDownload,
-            apiFirstStrict,
-            contextResetAfterPages,
-          });
+    if (apiFirstList) {
+      try {
+        summary = await runApiFirstListFlow();
+      } catch (error) {
+        if (apiFirstListStrict) {
+          throw error;
+        }
+        console.warn(`[API-LIST] failed, fallback to UI flow -> ${error.message}`);
+      }
+    }
+
+    if (!summary) {
+      summary = await runLegacyUiFlow();
+    }
   } catch (error) {
     runError = error;
     throw error;
   } finally {
+    const finishedAtMs = Date.now();
+    const elapsedSec = Math.max(0.001, (finishedAtMs - runStartedAtMs) / 1000);
+    const downloadedCount = summary?.downloaded || 0;
+    const failedCount = summary?.failed || 0;
+    const retryCount = summary?.retries || 0;
+    const attempts = downloadedCount + failedCount;
+    const benchmarkMetrics = {
+      at: new Date(finishedAtMs).toISOString(),
+      durationSec: Number(elapsedSec.toFixed(3)),
+      downloaded: downloadedCount,
+      failed: failedCount,
+      retries: retryCount,
+      pageErrors: summary?.pageErrors || 0,
+      workerFatalErrors: summary?.workerFatalErrors || 0,
+      rowsPerSecond: Number((downloadedCount / elapsedSec).toFixed(4)),
+      failureRate: Number((attempts > 0 ? failedCount / attempts : 0).toFixed(4)),
+      retryRate: Number((attempts > 0 ? retryCount / attempts : 0).toFixed(4)),
+      hadError: Boolean(runError),
+      error: runError?.message || null,
+    };
+
+    if (autoTune) {
+      await persistAutoTuneProfile({
+        filePath: autoTuneFilePath,
+        type,
+        metrics: benchmarkMetrics,
+        applied: autoTuneAdjustment,
+        options: {
+          workerCount,
+          chunkSize,
+          contextResetAfterJobs,
+          contextResetAfterPages,
+          contextResetHardFactor,
+          retryMaxAttempts: retryPolicy.maxAttempts,
+          retryBaseDelayMs: retryPolicy.baseDelayMs,
+          retryMaxDelayMs: retryPolicy.maxDelayMs,
+          retryJitterRatio: retryPolicy.jitterRatio,
+          apiFirstList,
+          apiFirstDownload,
+        },
+      }).catch((error) => {
+        console.warn(`[AUTO-TUNE] profile write failed -> ${error.message}`);
+      });
+      console.log(
+        `[BENCH] rowsPerSec=${benchmarkMetrics.rowsPerSecond} failureRate=${benchmarkMetrics.failureRate} retryRate=${benchmarkMetrics.retryRate} durationSec=${benchmarkMetrics.durationSec}`,
+      );
+    }
+
     await checkpointManager.finish(
       summary || {
         status: 'failed',

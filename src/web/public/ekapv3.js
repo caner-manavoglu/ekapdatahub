@@ -303,7 +303,7 @@ function readFormPayload() {
   const resumeFromLast = Boolean(el.resumeFromLast?.checked);
   const startPage = allPages ? 1 : parsePositiveInt(el.startPage.value, 1);
   const endPage = allPages ? null : parsePositiveInt(el.endPage.value, startPage);
-  const workerCount = Math.min(8, Math.max(1, parsePositiveInt(el.workerCount?.value, 1)));
+  const workerCount = Math.min(8, Math.max(1, parsePositiveInt(el.workerCount?.value, 3)));
 
   if (!fromDate || !toDate) {
     throw new Error("Başlangıç ve bitiş tarihi zorunlu.");
@@ -350,7 +350,7 @@ function renderStatus() {
         : String(downloadedCount);
       const runId = String(run.runId || "-");
       const startedAt = formatDate(run.startedAt);
-      const workerInfo = ` | Worker: ${Number(run.workerCount || 1)}`;
+      const workerInfo = ` | Worker: ${Number(run.workerCount || 1)} | Chunk: ${Number(run.jobChunkSize || 1)}`;
       const resumeInfo =
         run.resumeApplied && Number(run.resumeFromPage || 0) > 0
           ? ` | Devam: s.${run.resumeFromPage}`
@@ -378,7 +378,7 @@ function renderStatus() {
         : "";
     const runId = String(r.runId || "-");
     const startedAt = formatDate(r.startedAt);
-    const workerInfo = ` | Worker: ${Number(r.workerCount || 1)}`;
+    const workerInfo = ` | Worker: ${Number(r.workerCount || 1)} | Chunk: ${Number(r.jobChunkSize || 1)}`;
     el.runMeta.textContent = `run:${runId} | ${startedAt} | ${r.type} | ${r.fromDate} -> ${r.toDate} | ${formatPageRange(r)}${workerInfo}${resumeInfo}`;
     return;
   }
@@ -541,7 +541,7 @@ function renderHistory() {
       const duplicateCount = Number(row?.duplicateCount || 0);
       const result = `ok:${row?.downloadedCount || 0} / fail:${row?.failedCount || 0} / hedef:${targetLabel} / worker:${Number(
         row?.workerCount || 1,
-      )} / dup:${duplicateCount} / ${resumeSummary}`;
+      )} / chunk:${Number(row?.jobChunkSize || 1)} / dup:${duplicateCount} / ${resumeSummary}`;
       return `<tr>
   <td>${escapeHtml(formatDate(row?.startedAt))}</td>
   <td>${escapeHtml(row?.type || "-")}</td>

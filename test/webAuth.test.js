@@ -159,6 +159,11 @@ test("parseEkapV3Options should support allPages mode", () => {
   assert.equal(parsedAllPages.endPage, null);
   assert.equal(parsedAllPages.resumeFromLast, true);
   assert.equal(parsedAllPages.workerCount, 4);
+  assert.equal(parsedAllPages.jobChunkSize, 2);
+  assert.equal(parsedAllPages.timeoutRetries, 1);
+  assert.equal(parsedAllPages.retryBaseDelayMs, 450);
+  assert.equal(parsedAllPages.retryMaxDelayMs, 8000);
+  assert.equal(parsedAllPages.retryJitterRatio, 0.2);
   assert.equal(parsedAllPages.browserMode, "visible");
 
   const parsedRange = _internal.parseEkapV3Options({
@@ -180,6 +185,11 @@ test("parseEkapV3Options should support allPages mode", () => {
   assert.equal(parsedRange.resumeFromLast, false);
   assert.ok(parsedRange.workerCount >= 1);
   assert.ok(parsedRange.workerCount <= 8);
+  assert.equal(parsedRange.jobChunkSize, 2);
+  assert.equal(parsedRange.timeoutRetries, 1);
+  assert.equal(parsedRange.retryBaseDelayMs, 450);
+  assert.equal(parsedRange.retryMaxDelayMs, 8000);
+  assert.equal(parsedRange.retryJitterRatio, 0.2);
 });
 
 test("ekap v3 count payload helpers should build and parse correctly", () => {

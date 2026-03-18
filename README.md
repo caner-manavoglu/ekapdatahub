@@ -175,9 +175,32 @@ Not: Bu migration komutu geçiş dönemi içindir ve 30 Eylül 2026 sonrası kal
 - `OPS_ALERT_SCRAPE_DETAIL_P95_MS`: Scrape detay p95 alarm eşiği (ms)
 - `OPS_ALERT_SCRAPE_QUEUE_P95`: Scrape queue depth p95 alarm eşiği
 - `OPS_ALERT_STALLED_RUN_MINUTES`: İndirme run tıkanma alarm eşiği (dakika)
+- `EKAP_V3_WORKER_COUNT`: EKAP v3 varsayılan worker sayısı (önerilen başlangıç `3`)
+- `EKAP_V3_WORKER_COUNT_MAX`: EKAP v3 worker üst sınırı
+- `EKAP_V3_JOB_CHUNK_SIZE`: EKAP v3 varsayılan job chunk boyutu (önerilen `2`)
+- `EKAP_V3_JOB_CHUNK_SIZE_MAX`: EKAP v3 job chunk üst sınırı
+- `EKAP_V3_TIMEOUT_RETRIES`: Satır bazlı timeout sonrası tekrar deneme sayısı
+- `EKAP_V3_RETRY_BASE_DELAY_MS`: Retry başlangıç bekleme süresi
+- `EKAP_V3_RETRY_MAX_DELAY_MS`: Retry üst sınır bekleme süresi
+- `EKAP_V3_RETRY_JITTER_RATIO`: Retry jitter oranı (`0.0-1.0`)
+- `EKAP_V3_DATE_SHARD_ENABLED`: `true` ise büyük tarih aralıkları shard planına uygun olduğunda paralel çalıştırılır
+- `EKAP_V3_DATE_SHARD_DAYS`: Bir shard başına gün sayısı
+- `EKAP_V3_DATE_SHARD_MIN_SPAN_DAYS`: Shard mode için minimum tarih aralığı (gün)
+- `EKAP_V3_DATE_SHARD_MAX_PARALLEL`: Aynı anda çalışacak maksimum shard sayısı
 - `EKAP_V3_PREFLIGHT_CHECK_ENDPOINT`: `true` ise EKAP UI endpoint kontrolü yapılır
 - `EKAP_V3_PREFLIGHT_STRICT`: `true` ise endpoint timeout/network hatasında start isteği bloklanır
 - `EKAP_V3_PREFLIGHT_ENDPOINT_METHOD`: Endpoint health check HTTP metodu (`HEAD`/`GET`)
+- `CONTEXT_RESET_HARD_FACTOR`: Context reset için hard limit katsayısı (soft limit x katsayı)
+- `CHECKPOINT_FLUSH_EVERY`: Checkpoint dosyasına yazmadan önce birikecek event sayısı
+- `CHECKPOINT_FLUSH_INTERVAL_MS`: Checkpoint batch yazım maksimum bekleme süresi (ms)
+- `FAST_MODE`: `true` ise ağır doğrulamalar (örn. SHA256) varsayılan olarak kapanır
+- `COMPUTE_SHA256`: İndirilen dosya SHA256 hesaplamasını aç/kapat (`true/false`)
+- `BLOCK_RESOURCES`: Playwright tarafında image/font/analytics gibi gereksiz kaynakları bloklar (`true/false`)
+- `AUTO_TUNE`: Önceki run benchmarklarına göre worker/chunk/reset parametrelerini otomatik ayarlar (`true/false`)
+- `AUTO_TUNE_FILE`: Auto-tune profil dosya yolu (opsiyonel)
+- `RUN_TAG`: Bu run için dosya adı prefix'i (opsiyonel)
+- `API_FIRST_LIST`: EKAP v3 Playwright listesi UI tiklamasi yerine API-first akistan alınır (`true/false`)
+- `API_FIRST_LIST_STRICT`: API-first liste akisi hata verirse UI fallback yerine hataya duser (`true/false`)
 - `API_FIRST_DOWNLOAD`: EKAP v3 Playwright indirmede PDF'i once API request ile dener (`true/false`)
 - `API_FIRST_STRICT`: API-first basarisiz olursa UI fallback yerine hataya duser (`true/false`)
 - `OPS_BENCHMARK_COOKIE`: Benchmark scripti için hazır session cookie (opsiyonel)

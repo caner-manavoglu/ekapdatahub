@@ -60,23 +60,42 @@ Kullanılabilir parametreler:
 - `--retryMaxDelayMs=`: Retry üst sınır bekleme süresi (varsayılan `25000`)
 - `--retryJitterRatio=`: Retry jitter oranı `0.0-1.0` (varsayılan `0.25`)
 - `--browserMode=`: `headless` veya `visible`
+- `--blockResources=`: `true/false`, image/font/analytics gibi gereksiz kaynakları bloklar (varsayılan `true`)
 - `--workerCount=`: Sayfa bazlı kuyruk worker sayısı (sadece belirli sayfa aralığında, varsayılan `1`)
 - `--jobChunkSize=`: Kuyruktaki her işin kapsayacağı sayfa adedi (varsayılan `1`)
+- `--dateShardEnabled=`: `true/false`, sadece `allPages` modunda tarih araligini shard ederek paralel calistirir (varsayılan `false`)
+- `--dateShardDays=`: Bir shard'in kapsayacagi gun sayisi (varsayılan `7`)
+- `--dateShardParallel=`: Ayni anda calisacak shard sayisi (varsayılan `workerCount`)
+- `--dateShardMinSpanDays=`: Shard modunun devreye girmesi icin minimum aralik gun sayisi (varsayılan `14`)
 - `--adaptiveConcurrency=`: `true/false`, hata oranına göre worker havuzunu dinamik azalt/arttir (varsayılan `true`)
 - `--contextResetAfterJobs=`: Worker başına kaç job sonra context reset (varsayılan `12`)
 - `--contextResetAfterPages=`: Tek worker modunda kaç sayfa sonra context reset (varsayılan `20`)
+- `--contextResetHardFactor=`: Context reset hard limit katsayısı (varsayılan `3`, hard=`soft*katsayi`)
 - `--minDownloadBytes=`: İndirilen dosya minimum byte kontrolü (varsayılan `1024`)
 - `--enforcePdfHeader=`: `%PDF` header doğrulaması (`true/false`, varsayılan `true`)
+- `--fastMode=`: `true/false`, hiz odakli mod (SHA256 varsayilanini kapatir, minimum PDF kontrolleri korunur)
+- `--computeSha256=`: `true/false`, dosya SHA256 hesaplamasını aç/kapat (varsayılan `true`, fastMode'da varsayılan `false`)
+- `--apiFirstList=`: `true/false`, listeyi UI tiklamasi yerine EKAP liste API'sinden alir (varsayılan `true`)
+- `--apiFirstListStrict=`: `true/false`, API-first liste akisi hata verirse UI fallback yerine hataya duser (varsayılan `false`)
 - `--apiFirstDownload=`: `true/false`, PDF indirmeyi once API request ile dener (varsayılan `true`)
 - `--apiFirstStrict=`: `true/false`, API-first basarisiz olursa UI fallback yerine hataya duser (varsayılan `false`)
 - `--checkpoint=`: Checkpoint mekanizmasını aç/kapat (`true/false`, varsayılan `true`)
 - `--checkpointPath=`: Checkpoint dosya yolu
 - `--resetCheckpoint=`: Çalışma başında checkpoint sıfırlansın mı (`true/false`, varsayılan `false`)
+- `--checkpointFlushEvery=`: Checkpoint batch yazım event eşiği (varsayılan `8`)
+- `--checkpointFlushIntervalMs=`: Checkpoint batch yazım max bekleme süresi ms (varsayılan `1500`)
+- `--autoTune=`: `true/false`, onceki run benchmark metriklerine gore worker/chunk/reset parametrelerini otomatik ayarlar
+- `--autoTuneFile=`: Auto-tune profil dosya yolu (opsiyonel)
+- `--runTag=`: Dosya adlarina eklenecek run prefix'i (opsiyonel)
 - `--userDataDir=`: Chrome kullanıcı profili yolu
 
 Notlar:
 
 - Geriye uyumluluk için eski `--headless=true|false` parametresi de çalışır.
+- `--apiFirstList=true` modunda liste/grid tiklama akisi devre disidir; satirlar API'den alinip dogrudan karar detay URL'leri uretilir.
+- Context reset davranisi adaptiftir: soft limitte sadece hata/retry varsa resetlenir, hard limitte zorunlu resetlenir.
+- Dosya adlari run-bazli prefix ile uretilir (`<runTag>_...pdf`), bu sayede gereksiz `exists` taramasi azalir.
+- Run sonunda benchmark satiri yazilir (`rowsPerSec`, `failureRate`, `retryRate`) ve auto-tune profiline kaydedilir.
 - `--allPages=true` modunda worker havuzu devre dışı bırakılır ve tek worker ile devam edilir.
 - `--startRow>1` iken satır bazlı resume nedeniyle worker havuzu devre dışı bırakılır.
 - İndirme klasörleri:
@@ -87,6 +106,8 @@ Notlar:
 
 API-first indirme notu:
 
+- `gundemMaddesiId` degeri uygulamadaki AES-CBC algoritmasi ile `KararId`'ye cevrilir; karar detay sayfasi bu URL ile acilir.
+- Liste + PDF akisi API-first oldugu icin grid satiri tiklama kirilganligi minimuma iner.
 - Script download butonunun POST/GET bilgisini popup sayfasindan cikarip dogrudan request ile PDF indirir.
 - API-first basarisiz olursa (strict kapaliysa) UI click download fallback calisir.
 - Bu model popup/download event kirilganligini ve toplam indirme suresini azaltir.
