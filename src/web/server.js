@@ -797,6 +797,53 @@ function normalizeEkapV3Type(value) {
   return normalized === "uyusmazlik" ? "uyusmazlik" : normalized === "mahkeme" ? "mahkeme" : "";
 }
 
+function parseEkapV3InputDate(value, label = "Tarih") {
+  const input = String(value || "").trim();
+  const ymdMatch = input.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const dmyMatch = input.match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
+
+  let year = 0;
+  let month = 0;
+  let day = 0;
+  if (ymdMatch) {
+    year = toInt(ymdMatch[1], 0);
+    month = toInt(ymdMatch[2], 0);
+    day = toInt(ymdMatch[3], 0);
+  } else if (dmyMatch) {
+    day = toInt(dmyMatch[1], 0);
+    month = toInt(dmyMatch[2], 0);
+    year = toInt(dmyMatch[3], 0);
+  } else {
+    throw new Error(`${label} gecersiz. YYYY-MM-DD veya DD.MM.YYYY kullanin.`);
+  }
+
+  if (year < 1000 || month < 1 || month > 12 || day < 1 || day > 31) {
+    throw new Error(`${label} gecersiz.`);
+  }
+
+  const utcDate = new Date(Date.UTC(year, month - 1, day));
+  if (
+    Number.isNaN(utcDate.getTime()) ||
+    utcDate.getUTCFullYear() !== year ||
+    utcDate.getUTCMonth() + 1 !== month ||
+    utcDate.getUTCDate() !== day
+  ) {
+    throw new Error(`${label} gecersiz.`);
+  }
+
+  const yyyy = String(year).padStart(4, "0");
+  const mm = String(month).padStart(2, "0");
+  const dd = String(day).padStart(2, "0");
+  return {
+    year,
+    month,
+    day,
+    normalized: `${yyyy}-${mm}-${dd}`,
+    dmy: `${dd}.${mm}.${yyyy}`,
+    sortKey: year * 10000 + month * 100 + day,
+  };
+}
+
 function parseEkapV3Options(body) {
   const payload = body && typeof body === "object" ? body : {};
   const type = normalizeEkapV3Type(payload.type);
@@ -804,17 +851,23 @@ function parseEkapV3Options(body) {
     throw new Error("Geçersiz tür. mahkeme veya uyusmazlik olmalı.");
   }
 
-  const fromDate = String(payload.fromDate || "").trim();
-  const toDate = String(payload.toDate || "").trim();
-  if (!fromDate || !toDate) {
+  const fromDateRaw = String(payload.fromDate || "").trim();
+  const toDateRaw = String(payload.toDate || "").trim();
+  if (!fromDateRaw || !toDateRaw) {
     throw new Error("Başlangıç ve bitiş tarihi zorunludur.");
   }
+  const fromDateParsed = parseEkapV3InputDate(fromDateRaw, "Baslangic tarihi");
+  const toDateParsed = parseEkapV3InputDate(toDateRaw, "Bitis tarihi");
+  if (fromDateParsed.sortKey > toDateParsed.sortKey) {
+    throw new Error("Baslangic tarihi bitis tarihinden buyuk olamaz.");
+  }
+  const fromDate = fromDateParsed.normalized;
+  const toDate = toDateParsed.normalized;
 
   const allPages = toBool(payload.allPages, false);
   const startPage = allPages ? 1 : Math.max(1, toInt(payload.startPage, 1));
   const startRow = Math.max(1, toInt(payload.startRow, 1));
   const endPage = allPages ? null : Math.max(startPage, toInt(payload.endPage, startPage));
-  const resumeFromLast = toBool(payload.resumeFromLast, false);
   const workerCount = Math.min(
     EKAP_V3_WORKER_COUNT_MAX,
     Math.max(1, toInt(payload.workerCount, EKAP_V3_WORKER_COUNT_DEFAULT)),
@@ -832,7 +885,6 @@ function parseEkapV3Options(body) {
     startRow,
     endPage,
     allPages,
-    resumeFromLast,
     workerCount,
     browserMode,
   };
@@ -849,20 +901,8 @@ function parsePageAndLimit(query, { defaultLimit, maxLimit }) {
 }
 
 function formatEkapV3CountDateBoundary(value, boundary) {
-  const input = String(value || "").trim();
-  const ymd = input.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (ymd) {
-    const dayPart = `${ymd[3]}.${ymd[2]}.${ymd[1]}`;
-    return `${dayPart} ${boundary === "start" ? "00:00:00" : "23:59:00"}`;
-  }
-
-  const dmy = input.match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
-  if (dmy) {
-    const dayPart = `${dmy[1]}.${dmy[2]}.${dmy[3]}`;
-    return `${dayPart} ${boundary === "start" ? "00:00:00" : "23:59:00"}`;
-  }
-
-  throw new Error(`Gecersiz tarih formati: ${value}`);
+  const parsed = parseEkapV3InputDate(value, "Tarih");
+  return `${parsed.dmy} ${boundary === "start" ? "00:00:00" : "23:59:00"}`;
 }
 
 function buildEkapV3CountPayload(type, fromDate, toDate) {
@@ -992,59 +1032,6 @@ async function fetchEkapV3CountFromApi(options) {
   }
 }
 
-function getEkapV3LastProcessedPage(runLike) {
-  const pages = Array.isArray(runLike?.pagesProcessed) ? runLike.pagesProcessed : [];
-  let maxPage = 0;
-  for (const value of pages) {
-    const pageNo = toInt(value, 0);
-    if (pageNo > maxPage) {
-      maxPage = pageNo;
-    }
-  }
-  return maxPage;
-}
-
-function applyEkapV3ResumeOptions(options, resumeRun) {
-  const nextOptions = {
-    ...(options || {}),
-  };
-
-  if (!nextOptions.resumeFromLast) {
-    return {
-      options: nextOptions,
-      resumeMeta: null,
-    };
-  }
-
-  if (!resumeRun) {
-    throw new Error(
-      "Kaldığı yerden devam için aynı tür ve tarih aralığında durdurulmuş/başarısız bir çalışma bulunamadı.",
-    );
-  }
-
-  const lastProcessedPage = getEkapV3LastProcessedPage(resumeRun);
-  const nextStartPage = Math.max(1, lastProcessedPage > 0 ? lastProcessedPage + 1 : nextOptions.startPage);
-
-  if (!nextOptions.allPages && nextStartPage > nextOptions.endPage) {
-    throw new Error(
-      "Kaldığı yerden devam için seçilen aralık tamamlanmış görünüyor. Bitiş sayfasını artırın veya yeni aralık seçin.",
-    );
-  }
-
-  nextOptions.startPage = nextStartPage;
-  nextOptions.startRow = 1;
-
-  return {
-    options: nextOptions,
-    resumeMeta: {
-      enabled: true,
-      baseRunId: resumeRun?._id || null,
-      lastProcessedPage: lastProcessedPage > 0 ? lastProcessedPage : null,
-      resumedFromPage: nextStartPage,
-    },
-  };
-}
-
 function createEkapV3RunId() {
   return `ekapv3-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -1092,99 +1079,6 @@ function buildEkapV3CheckpointPath(options) {
   const toDate = toSafeCheckpointSegment(options?.toDate);
   const fileName = `${type}-${fromDate}-${toDate}.json`;
   return path.join(EKAP_V3_CHECKPOINT_DIR, fileName);
-}
-
-async function readEkapV3Checkpoint(checkpointPath) {
-  const absolutePath = path.resolve(String(checkpointPath || ""));
-  if (!absolutePath) return null;
-  let raw;
-  try {
-    raw = await fs.promises.readFile(absolutePath, "utf8");
-  } catch (error) {
-    if (error?.code === "ENOENT") return null;
-    throw error;
-  }
-
-  let parsed = null;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (_) {
-    return null;
-  }
-
-  const lastSuccess = parsed?.lastSuccess;
-  const page = Math.max(0, toInt(lastSuccess?.page, 0));
-  const row = Math.max(0, toInt(lastSuccess?.row, 0));
-  if (page < 1 || row < 1) {
-    return {
-      path: absolutePath,
-      raw: parsed,
-      lastSuccess: null,
-    };
-  }
-
-  return {
-    path: absolutePath,
-    raw: parsed,
-    lastSuccess: {
-      page,
-      row,
-    },
-  };
-}
-
-function applyEkapV3CheckpointResumeOptions(options, checkpoint) {
-  const nextOptions = {
-    ...(options || {}),
-  };
-  const meta = {
-    applied: false,
-    source: "none",
-    checkpointPath: checkpoint?.path || null,
-    checkpointPage: null,
-    checkpointRow: null,
-  };
-
-  if (!nextOptions.resumeFromLast) {
-    return {
-      options: nextOptions,
-      checkpointMeta: meta,
-    };
-  }
-
-  const lastSuccess = checkpoint?.lastSuccess;
-  if (!lastSuccess) {
-    return {
-      options: nextOptions,
-      checkpointMeta: meta,
-    };
-  }
-
-  const checkpointPage = Math.max(1, toInt(lastSuccess.page, 1));
-  const checkpointRow = Math.max(1, toInt(lastSuccess.row, 1));
-
-  if (!nextOptions.allPages && checkpointPage > nextOptions.endPage) {
-    throw new Error(
-      "Checkpoint secilen bitis sayfasinin disinda. Bitiş sayfasını artırın veya resume kapatıp yeniden başlatın.",
-    );
-  }
-
-  if (checkpointPage > nextOptions.startPage) {
-    nextOptions.startPage = checkpointPage;
-    nextOptions.startRow = checkpointRow + 1;
-  } else if (checkpointPage === nextOptions.startPage) {
-    nextOptions.startRow = Math.max(nextOptions.startRow || 1, checkpointRow + 1);
-  }
-
-  meta.applied = true;
-  meta.source = "checkpoint";
-  meta.checkpointPage = checkpointPage;
-  meta.checkpointRow = checkpointRow;
-
-  return {
-    options: nextOptions,
-    checkpointMeta: meta,
-  };
 }
 
 async function runEkapV3Preflight(options) {
@@ -2526,9 +2420,8 @@ const handleEkapV3Start = async (req, res, next) => {
     let options = {
       ...requestedOptions,
     };
-    let resumeMeta = null;
     const checkpointPath = buildEkapV3CheckpointPath(requestedOptions);
-    let checkpointMeta = {
+    const checkpointMeta = {
       applied: false,
       source: "none",
       checkpointPath,
@@ -2545,49 +2438,6 @@ const handleEkapV3Start = async (req, res, next) => {
       rowsPerPageEstimate: EKAP_V3_ROWS_PER_PAGE_ESTIMATE,
       error: null,
     };
-
-    const checkpointState = await readEkapV3Checkpoint(checkpointPath);
-
-    if (requestedOptions.resumeFromLast) {
-      const resumeRun = ekapV3LogCollection
-        ? await ekapV3LogCollection
-            .find({
-              type: requestedOptions.type,
-              "dateRange.from": requestedOptions.fromDate,
-              "dateRange.to": requestedOptions.toDate,
-              status: { $in: ["stopped", "failed"] },
-            })
-            .sort({ startedAt: -1, createdAt: -1 })
-            .limit(1)
-            .next()
-        : null;
-
-      if (resumeRun) {
-        const resumeResult = applyEkapV3ResumeOptions(requestedOptions, resumeRun);
-        options = resumeResult.options;
-        resumeMeta = {
-          ...resumeResult.resumeMeta,
-          source: "history",
-        };
-      } else if (!checkpointState?.lastSuccess) {
-        throw new Error(
-          "Kaldığı yerden devam için aynı tür ve tarih aralığında durdurulmuş/başarısız bir çalışma veya checkpoint bulunamadı.",
-        );
-      }
-    }
-
-    const checkpointResumeResult = applyEkapV3CheckpointResumeOptions(options, checkpointState);
-    options = checkpointResumeResult.options;
-    checkpointMeta = checkpointResumeResult.checkpointMeta;
-    if (requestedOptions.resumeFromLast && !resumeMeta && checkpointMeta.applied) {
-      resumeMeta = {
-        enabled: true,
-        baseRunId: null,
-        lastProcessedPage: checkpointMeta.checkpointPage,
-        resumedFromPage: options.startPage,
-        source: "checkpoint",
-      };
-    }
 
     preflight = await runEkapV3Preflight(options);
 
@@ -2621,7 +2471,7 @@ const handleEkapV3Start = async (req, res, next) => {
       `--browserMode=${options.browserMode}`,
       "--checkpoint=true",
       `--checkpointPath=${checkpointPath}`,
-      `--resetCheckpoint=${requestedOptions.resumeFromLast ? "false" : "true"}`,
+      "--resetCheckpoint=true",
     ];
     if (options.allPages) {
       args.push("--allPages=true");
@@ -2642,11 +2492,6 @@ const handleEkapV3Start = async (req, res, next) => {
       startRow: options.startRow,
       endPage: options.endPage,
       allPages: options.allPages,
-      resumeFromLast: Boolean(requestedOptions.resumeFromLast),
-      resumeApplied: Boolean(resumeMeta),
-      resumeBaseRunId: resumeMeta?.baseRunId || null,
-      resumeFromPage: resumeMeta?.resumedFromPage ?? null,
-      resumeFromRow: options.startRow,
       checkpointPath,
       checkpointMeta,
       workerCount: options.workerCount,
@@ -2673,14 +2518,6 @@ const handleEkapV3Start = async (req, res, next) => {
     ekapV3State.currentRun = currentRun;
     ekapV3State.lastError = null;
     ekapV3State.logs = [];
-    if (resumeMeta) {
-      appendEkapV3Log(
-        "info",
-        `[RESUME] oncekiRun=${resumeMeta.baseRunId || "-"} lastProcessedPage=${
-          resumeMeta.lastProcessedPage || "-"
-        } resumedFromPage=${resumeMeta.resumedFromPage}`,
-      );
-    }
     if (checkpointMeta?.checkpointPath) {
       appendEkapV3Log(
         checkpointMeta.applied ? "info" : "warn",
@@ -2727,14 +2564,6 @@ const handleEkapV3Start = async (req, res, next) => {
           startRow: options.startRow,
           endPage: options.endPage,
           allPages: options.allPages,
-        },
-        resume: {
-          requested: Boolean(requestedOptions.resumeFromLast),
-          applied: Boolean(resumeMeta),
-          baseRunId: resumeMeta?.baseRunId || null,
-          lastProcessedPage: resumeMeta?.lastProcessedPage ?? null,
-          resumedFromPage: resumeMeta?.resumedFromPage ?? null,
-          resumedFromRow: options.startRow,
         },
         checkpointPath,
         checkpointMeta,
@@ -3071,7 +2900,6 @@ app.get("/api/ekapv3/history", async (req, res, next) => {
         type: row?.type || null,
         dateRange: row?.dateRange || null,
         selectedPages: row?.selectedPages || null,
-        resume: row?.resume || null,
         checkpointPath: row?.checkpointPath || null,
         checkpointMeta: row?.checkpointMeta || null,
         checkpoint: row?.checkpoint || null,
@@ -3777,8 +3605,6 @@ module.exports = {
     buildOpsDashboardData,
     getRecentOpsAlertEvents,
     normalizeOpsBenchmarkPayload,
-    getEkapV3LastProcessedPage,
-    applyEkapV3ResumeOptions,
     verifyAuthPassword,
     resolveApiRequiredRole,
     hasRequiredRole,

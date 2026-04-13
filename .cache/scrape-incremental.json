@@ -1,0 +1,421 @@
+{
+  "updatedAt": "2026-04-13T21:46:19.086Z",
+  "lastSeen": {
+    "id": "5b57bc25e4e80e671191ec1fa37db7d83ffdfe3ae308c4896ed737abde896c1f",
+    "ihaleTarihSaat": "23.03.2027 14:00"
+  },
+  "sampleRows": [
+    {
+      "id": "5b57bc25e4e80e671191ec1fa37db7d83ffdfe3ae308c4896ed737abde896c1f",
+      "ihaleTarihSaat": "23.03.2027 14:00"
+    },
+    {
+      "id": "46e049ffaa37ab989d68c36c7dff0504ce281a5876520dcc8f0161990ecf6ca4",
+      "ihaleTarihSaat": "21.07.2026 11:00"
+    },
+    {
+      "id": "343646cdee10092966061188a99bfafb5a68c03f37562e818421130b699ac53f",
+      "ihaleTarihSaat": "03.06.2026 10:30"
+    },
+    {
+      "id": "9ab58c32e9b1acc73f9885c08925350616a3a8b787c777401a0b24c319c19db9",
+      "ihaleTarihSaat": "02.06.2026 10:00"
+    },
+    {
+      "id": "55566705141747e6c2cfebc8d8476672aecd65aac0c85b8cb74a7761d991e17e",
+      "ihaleTarihSaat": "22.05.2026 11:00"
+    },
+    {
+      "id": "3d5d729d65cb8483d0b569a9b27cc095d839df685e0f96f7f1fd4c4865c6b2b7",
+      "ihaleTarihSaat": "20.05.2026 11:00"
+    },
+    {
+      "id": "c9fcd28b23dbae378565339970a75da53356530113af1a69c96c75ad328e072d",
+      "ihaleTarihSaat": "20.05.2026 11:00"
+    },
+    {
+      "id": "8c088a943fdcd981e2a7b21b4d8c5fa0fc362d2b6eb1bc77e8f38b04a74bd1ca",
+      "ihaleTarihSaat": "20.05.2026 10:30"
+    },
+    {
+      "id": "3948094166b6f56ae994ed7c446ebcf1fbc9c64fb221e6f6263f497f7f423fbb",
+      "ihaleTarihSaat": "20.05.2026 10:00"
+    },
+    {
+      "id": "a097db43916f5b1a23daaadb78145b8b109df28e138286f180b59565077f9ff5",
+      "ihaleTarihSaat": "18.05.2026 11:00"
+    },
+    {
+      "id": "dc0c3a35b52885074400c6bd31abe92bac4c84c282709a44578be938adbd1f73",
+      "ihaleTarihSaat": "18.05.2026 11:00"
+    },
+    {
+      "id": "0b602e3dd38dbda4a9370800bc32e28001e4016a55a99061538b0ba42d513389",
+      "ihaleTarihSaat": "18.05.2026 10:30"
+    },
+    {
+      "id": "69aa07190968f230a62ed7398663b544a6b86fff9b265da5bd80d6b39e606985",
+      "ihaleTarihSaat": "18.05.2026 10:30"
+    },
+    {
+      "id": "c55ffb2842e3564eeddb712e1d8e2ecb50aac5a29f64199da78643797bc5d58f",
+      "ihaleTarihSaat": "18.05.2026 10:00"
+    },
+    {
+      "id": "e2a158b6ee89fadbc0bbac6a9ee2505167ff11fc9a38af5a39c6a65ab830793c",
+      "ihaleTarihSaat": "18.05.2026 10:00"
+    },
+    {
+      "id": "678850ab1cd580cfd1ceaa63be2797314b30d93c2b5b45680d31f59b459402d9",
+      "ihaleTarihSaat": "18.05.2026 10:00"
+    },
+    {
+      "id": "364c6c831832fe7d2ee281faad6ffd0d3e5befc0f004cba17241d1de8d6ceafc",
+      "ihaleTarihSaat": "18.05.2026 10:00"
+    },
+    {
+      "id": "898be42c59cc83d8fa7c3fb7350089c22346a133f90140eff58e0ff2763c297e",
+      "ihaleTarihSaat": "15.05.2026 14:30"
+    },
+    {
+      "id": "060f35b5076ec497c5b67402f116f78cacff5b4d5cd0f8b487437f202c52e4a0",
+      "ihaleTarihSaat": "15.05.2026 11:00"
+    },
+    {
+      "id": "50c13b63fb967139ccf06d601b92b3e5f20db461bb1abd57c119f9bd1e0754e5",
+      "ihaleTarihSaat": "15.05.2026 11:00"
+    },
+    {
+      "id": "31b9d79c5a15baf0faa4f3704b70902a24ed0257501fb4f92a91b8ab38ab1365",
+      "ihaleTarihSaat": "15.05.2026 10:30"
+    },
+    {
+      "id": "83f7a94fcf3dc4cd6bbe9b9d0722b2dcb0d20680aab34b404d500f4e99d4d41a",
+      "ihaleTarihSaat": "15.05.2026 10:30"
+    },
+    {
+      "id": "306ec0d2e05acb5bf78c69e8565b4094de738c153ca260c19752ce98cfd3633a",
+      "ihaleTarihSaat": "15.05.2026 10:30"
+    },
+    {
+      "id": "b5b4cf6a8f343cc663e04ca3c3652546a090f144f7f4c4d4e15fc3947772e4b9",
+      "ihaleTarihSaat": "15.05.2026 10:30"
+    },
+    {
+      "id": "a32ff8d5d7212a4ad6165ea58b7a0958a5b7d972a6dac7efb96e9d6e0cd8f6ae",
+      "ihaleTarihSaat": "15.05.2026 10:00"
+    },
+    {
+      "id": "a348184d2163406016f5d89c452b53736a05d73faca1aff3cd09fc5a589bcedb",
+      "ihaleTarihSaat": "15.05.2026 10:00"
+    },
+    {
+      "id": "11fdd374065105f875d5cfb9c5b829e18a8b8eb1820055efb678b414f009a5ea",
+      "ihaleTarihSaat": "15.05.2026 10:00"
+    },
+    {
+      "id": "e38a0b9c64e9e0f3a373125c0f7db4bed08c50fb6b294a0f863246cfc8082172",
+      "ihaleTarihSaat": "15.05.2026 10:00"
+    },
+    {
+      "id": "09e80071d33477766a9b7550d47b450f979c580dd3f2da78f3ac2f72ed3a16d4",
+      "ihaleTarihSaat": "15.05.2026 10:00"
+    },
+    {
+      "id": "a8893cbc405e9b5c6381a7eb6922b39a78e37775458a93b6dc377d201d8f44a3",
+      "ihaleTarihSaat": "15.05.2026 10:00"
+    },
+    {
+      "id": "f4dab337f5e79bea35d89910b0aebdec6da09a95af87e526a30e8d170f8476ce",
+      "ihaleTarihSaat": "15.05.2026 10:00"
+    },
+    {
+      "id": "14930b7e83bd3a97abda8cb4968212890ad836e20b5511013672591d7416d081",
+      "ihaleTarihSaat": "15.05.2026 10:00"
+    },
+    {
+      "id": "902b25b7301c71c58c8f5268727f4fd14404981225c2196a47f4738cb9ae2e53",
+      "ihaleTarihSaat": "14.05.2026 14:30"
+    },
+    {
+      "id": "c1dcd4173b48ce3491d38b11aee4ddfd4eeab230c755b06b0367f0a80acbc3d6",
+      "ihaleTarihSaat": "14.05.2026 14:00"
+    },
+    {
+      "id": "b04662573bf46ad7b4fffeda896a186543490e7cab116522b7088ee1f8f1afab",
+      "ihaleTarihSaat": "14.05.2026 14:00"
+    },
+    {
+      "id": "04e83616e427f2cd3f0a45925f146cda53e342d2e4351bc1e8fc424cd5beb7cc",
+      "ihaleTarihSaat": "14.05.2026 11:00"
+    },
+    {
+      "id": "022238edb8f37365c0fba84f608878d9740a83e1ff3a2c1d259cb60ffbdb4ca8",
+      "ihaleTarihSaat": "14.05.2026 10:30"
+    },
+    {
+      "id": "b4ba78a14a27528d1e9913e4612813361e37d7866e19ae93290bb2d9b9a8c2f1",
+      "ihaleTarihSaat": "14.05.2026 10:30"
+    },
+    {
+      "id": "720a0a680a1f6c99690ce19943b4bc34e0ebba27b77cb3d62f8c6a744a5e8232",
+      "ihaleTarihSaat": "14.05.2026 10:30"
+    },
+    {
+      "id": "99c0535bbdf40623dda02fd9fc96f4326ffb07bc3ce94539d9ad273b5f39adba",
+      "ihaleTarihSaat": "14.05.2026 10:30"
+    },
+    {
+      "id": "e2ea7ce17f5d4b07c877c565f399dd9e7e118a45332d08c581628a5669ec4f96",
+      "ihaleTarihSaat": "14.05.2026 10:30"
+    },
+    {
+      "id": "68ac5b840e6f598c18834c400b4203bb2e091439dab692f147a81a5c4b489d56",
+      "ihaleTarihSaat": "14.05.2026 10:30"
+    },
+    {
+      "id": "fe1a19d73c971837f327d99dc4c50d3fd0d378a3cb7e799295d0f56f077f2b33",
+      "ihaleTarihSaat": "14.05.2026 10:30"
+    },
+    {
+      "id": "a77a7852d7d459a3e5b3b443f5258ed78d4676f0049b825e718f68266a077e37",
+      "ihaleTarihSaat": "14.05.2026 10:30"
+    },
+    {
+      "id": "c73f7934eb068148e057316a2c14d1f9fb8244b0861b9123f8e26edff1432a06",
+      "ihaleTarihSaat": "14.05.2026 10:00"
+    },
+    {
+      "id": "623eeb2b4fe1aae46d7e737ca6795c128f076c6bbd646b897ed10ca097c366b3",
+      "ihaleTarihSaat": "14.05.2026 10:00"
+    },
+    {
+      "id": "a7730fd14eaacbaacf53843392d369ebdff141901c489e286289da44fa115e16",
+      "ihaleTarihSaat": "14.05.2026 10:00"
+    },
+    {
+      "id": "34dd4d1b8bbd9ed3921985612770c01586c97764e1f214b425b358876f3a55de",
+      "ihaleTarihSaat": "14.05.2026 10:00"
+    },
+    {
+      "id": "545306f083a85e565e78ff174c91175f7fbb153f2bc30e033d58a13689e02b6b",
+      "ihaleTarihSaat": "14.05.2026 10:00"
+    },
+    {
+      "id": "36b99a3ba0b77fb328783639eae76b91f61e25b4312e3c6da282ce974fa25ff2",
+      "ihaleTarihSaat": "14.05.2026 10:00"
+    },
+    {
+      "id": "3850b703176e41a7cbce37e75fc5f6a51608cb8184c49aa37e7fc497acacf9c8",
+      "ihaleTarihSaat": "14.05.2026 10:00"
+    },
+    {
+      "id": "2b4f62dd861cf45c675752ac2f502cdbcd6f0bf5a70c9ad70bdc2224f948a287",
+      "ihaleTarihSaat": "14.05.2026 10:00"
+    },
+    {
+      "id": "07850f4bd5b0e025925f8cdf78f455955528a0fa496ed8fa412d6583fe36f339",
+      "ihaleTarihSaat": "14.05.2026 10:00"
+    },
+    {
+      "id": "fa8c9783c782b37df76a4dc6dd7ee4fd626781d16068a530e4f438bad16a6119",
+      "ihaleTarihSaat": "14.05.2026 10:00"
+    },
+    {
+      "id": "7c2d4a6d32ef23aefce1b0e21f072dc8d054504b0bed80fcce4978ac938f3890",
+      "ihaleTarihSaat": "14.05.2026 10:00"
+    },
+    {
+      "id": "5beaf8704739a8775cab5586863847172b6bf3fa2ffce5b03351c6638647234f",
+      "ihaleTarihSaat": "13.05.2026 14:00"
+    },
+    {
+      "id": "6c3a64e20885b61edb2aff09006355b381de52dfb4730027bf821d8e6607abe2",
+      "ihaleTarihSaat": "13.05.2026 14:00"
+    },
+    {
+      "id": "453100999f6b5474f41cf834b777b9186899d50aa839175d1bea26013e53d00c",
+      "ihaleTarihSaat": "13.05.2026 14:00"
+    },
+    {
+      "id": "750d864ea585975d5a0cc1d241f63faa6a0c56e6668cb1fa395364bb9c4162a5",
+      "ihaleTarihSaat": "13.05.2026 12:00"
+    },
+    {
+      "id": "4deca703cf80beea7315aebbafb72ed6d3c783d8ff1465c3173730f09aea58c7",
+      "ihaleTarihSaat": "13.05.2026 11:30"
+    },
+    {
+      "id": "67150289f5f96814b37a88d5191661f4ee95cb19e67394988a0f2f0d4a59ffb9",
+      "ihaleTarihSaat": "13.05.2026 11:00"
+    },
+    {
+      "id": "c4fd4005530d7389b016aadbcb4901fa81711e104fd7562533a491cb80dc5f66",
+      "ihaleTarihSaat": "13.05.2026 11:00"
+    },
+    {
+      "id": "8cd9bfcdbaf4fa4b67133b3a6838a7aa7cd204f22d3d42b6c6754beeab2eaad1",
+      "ihaleTarihSaat": "13.05.2026 11:00"
+    },
+    {
+      "id": "4378e942abda76ef45393493452594aa238fa5035d9a2f4a6448acdc8ace9067",
+      "ihaleTarihSaat": "13.05.2026 10:30"
+    },
+    {
+      "id": "d61dd060bfbc5bca8ddf61e62cef8bfebfc7d1ab3ab137405fdb4210d6235a4b",
+      "ihaleTarihSaat": "13.05.2026 10:30"
+    },
+    {
+      "id": "91d947efc5f18df330c492b4a750a23a485df8ceb8fbd30b90388a39a167ae2f",
+      "ihaleTarihSaat": "13.05.2026 10:30"
+    },
+    {
+      "id": "de9cec4780a0afa59df842521b1a582da64eb21813b863a0cfb6b74d7bb3666e",
+      "ihaleTarihSaat": "13.05.2026 10:30"
+    },
+    {
+      "id": "c2d133d98c071a35f92cc3232ca84a99122788f8e05d71629978b026108e8530",
+      "ihaleTarihSaat": "13.05.2026 10:30"
+    },
+    {
+      "id": "9b53c5e2354e69093348efadd49f66b09703bd1f448237e48a92492285b3cc1c",
+      "ihaleTarihSaat": "13.05.2026 10:30"
+    },
+    {
+      "id": "4887bd98f098320da9ac7ba36490beb46ecbdbc975c4d1ddc55cbe43fd140ba3",
+      "ihaleTarihSaat": "13.05.2026 10:30"
+    },
+    {
+      "id": "2397ded8915a7b39ebd8b5ff22e70d9c38a954ef693b1eb5bceaab36f939f0a2",
+      "ihaleTarihSaat": "13.05.2026 10:30"
+    },
+    {
+      "id": "abd2654d1a393d730e2d19afb0089f4aca85178eb03ecc4840989088ce89aea5",
+      "ihaleTarihSaat": "13.05.2026 10:30"
+    },
+    {
+      "id": "87ef5eb395a2aadeb71c87cd78c69616b88a0ad59800600bae60aa078cb1211d",
+      "ihaleTarihSaat": "13.05.2026 10:30"
+    },
+    {
+      "id": "1cf75ddd84086cd143fd2132d734db206ddb93b3301843a3b1f978fb98152ff2",
+      "ihaleTarihSaat": "13.05.2026 10:00"
+    },
+    {
+      "id": "c42a2074789a9648ccf939e8dc16443584ae405a2ccb3bd1c5b96b8a2464f6c2",
+      "ihaleTarihSaat": "13.05.2026 10:00"
+    },
+    {
+      "id": "6928abbcc0f470fbf27ed394201455e74198603faa5adcb87905de8e8955a9d5",
+      "ihaleTarihSaat": "13.05.2026 10:00"
+    },
+    {
+      "id": "372fafa15c07e489d66edb6d00d330d18551314346ed26339c62cb878f25497d",
+      "ihaleTarihSaat": "13.05.2026 10:00"
+    },
+    {
+      "id": "d8ed38207443a1fbbfb7976e5bbce99a69cb5fafd97771ee2b14d2032d6f9fd9",
+      "ihaleTarihSaat": "13.05.2026 10:00"
+    },
+    {
+      "id": "265901401b9b27d0e1d5dface301181f55d60ae4109c38fabcd1c176812b3dd6",
+      "ihaleTarihSaat": "13.05.2026 10:00"
+    },
+    {
+      "id": "c3be088f94c5c5d6ad9276b0580fe6ad05efcbc9d61774f13738e0b65f9d4b45",
+      "ihaleTarihSaat": "13.05.2026 10:00"
+    },
+    {
+      "id": "ed1b9504aaeb7d8842594297ef7de5e1dd73bdef22aa2cb3d467af70c7ebf9d9",
+      "ihaleTarihSaat": "12.05.2026 14:30"
+    },
+    {
+      "id": "186585d96ea21385da7e3289bbf653e1d2b2c9d215e5bf8a37125210a1c3dc1f",
+      "ihaleTarihSaat": "12.05.2026 14:00"
+    },
+    {
+      "id": "5c527c1a929877d7ba230525ac8bd456f3bbb07d0901c2ec55893279045c4d86",
+      "ihaleTarihSaat": "12.05.2026 11:00"
+    },
+    {
+      "id": "aa5453398f3ab72e9c19a502116b5709dd27cd4501108fa81b0795e118282464",
+      "ihaleTarihSaat": "12.05.2026 11:00"
+    },
+    {
+      "id": "2f3a78b0f14a5419990a0ea354d1c75aedb9a22b1b7cdb2ceabcb86a092b964a",
+      "ihaleTarihSaat": "12.05.2026 11:00"
+    },
+    {
+      "id": "74d374ff0fc55b054270dfae83c0e74af69c51c874fa6796465be4b505db7a93",
+      "ihaleTarihSaat": "12.05.2026 11:00"
+    },
+    {
+      "id": "da03de807b1e339bdbbcaed06691906de91dd0e0d7e7806e7d8234c3e77155ca",
+      "ihaleTarihSaat": "12.05.2026 11:00"
+    },
+    {
+      "id": "2515073ea3ec1f1a23c037ca503a83d72b1228b435de81d393eb9c4fa27cdfc7",
+      "ihaleTarihSaat": "12.05.2026 11:00"
+    },
+    {
+      "id": "75991c4d090c1d56b39fddded05c785dfbd6dfcd3f994688e63c72654ee9407f",
+      "ihaleTarihSaat": "12.05.2026 11:00"
+    },
+    {
+      "id": "ee1ba8ec668effd44eaee5f412d635240850c1a53eaa3c615e29ff818ba2debf",
+      "ihaleTarihSaat": "12.05.2026 11:00"
+    },
+    {
+      "id": "df8ae265096b0138737fd37a5679f9ec9620a6f3c2601b1a7246192172f10dbe",
+      "ihaleTarihSaat": "12.05.2026 11:00"
+    },
+    {
+      "id": "ebf750a1bd00f06842a35005384dbfb270ce5d90e2de6572df34dc5f53de0021",
+      "ihaleTarihSaat": "12.05.2026 11:00"
+    },
+    {
+      "id": "47cff8c7eedfebb69595a2ac27a344cf0d951f4ec576c71f295c17a55c0f2dce",
+      "ihaleTarihSaat": "12.05.2026 10:30"
+    },
+    {
+      "id": "fadcf8d6b56764ea57a6c7962dfa09585ea4c52c2a22f1544e468aaff6f7090a",
+      "ihaleTarihSaat": "12.05.2026 10:30"
+    },
+    {
+      "id": "c58d855f00df3b748307b605ca7ce5ef00a66ec65c441d456b2f927c6b72d43e",
+      "ihaleTarihSaat": "12.05.2026 10:30"
+    },
+    {
+      "id": "ff017180527a83b41e78c2f717b267f0813ccc0bc5308eea5497e56fbaa86fba",
+      "ihaleTarihSaat": "12.05.2026 10:30"
+    },
+    {
+      "id": "82b13cb2eb494ff92820e323b7fee3acf5d5e132f15f5366681f54e8abe899aa",
+      "ihaleTarihSaat": "12.05.2026 10:30"
+    },
+    {
+      "id": "ef57637a11b407fb5fa5ca84b2eac9535fbcf201e602394156e80900d419c396",
+      "ihaleTarihSaat": "12.05.2026 10:30"
+    },
+    {
+      "id": "8e273dd3a4b2805b3d89d1b10778781acb6f92fe7a210e5cfa7bf17b53498355",
+      "ihaleTarihSaat": "12.05.2026 10:30"
+    },
+    {
+      "id": "4990f4bbe94154e463a1dc9cc3db59a793f05bafc69cc4066981e4a995007147",
+      "ihaleTarihSaat": "12.05.2026 10:30"
+    },
+    {
+      "id": "a8adfb07f08ea067061332efcc90e470842aa65df14c5586bdc2d0a0ebd2bd1b",
+      "ihaleTarihSaat": "12.05.2026 10:00"
+    }
+  ],
+  "lastRun": {
+    "processed": 145,
+    "saved": 145,
+    "failed": 0,
+    "skippedUnchanged": 0,
+    "pagesProcessed": 7,
+    "stopped": true
+  }
+}

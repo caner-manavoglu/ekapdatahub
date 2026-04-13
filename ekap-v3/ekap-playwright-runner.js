@@ -272,6 +272,165 @@ const ensurePdfExtension = (fileName, fallbackStem = 'ekap') => {
   return /\.pdf$/i.test(safe) ? safe : `${safe}.pdf`;
 };
 
+const decodeHtmlAttribute = (value) =>
+  String(value || '')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&');
+
+const collectHiddenInputsFromHtml = (html) => {
+  const source = String(html || '');
+  const result = {};
+  const inputTagRegex = /<input\b[^>]*>/gi;
+  let tagMatch;
+
+  while ((tagMatch = inputTagRegex.exec(source))) {
+    const tag = tagMatch[0];
+    const typeMatch = tag.match(/\btype\s*=\s*["']?([^"'\s>]+)["']?/i);
+    const type = String(typeMatch?.[1] || '').toLowerCase();
+    if (type && type !== 'hidden') continue;
+
+    const nameMatch = tag.match(/\bname\s*=\s*["']([^"']+)["']/i);
+    if (!nameMatch || !nameMatch[1]) continue;
+    const valueMatch = tag.match(/\bvalue\s*=\s*["']([^"']*)["']/i);
+    result[nameMatch[1]] = decodeHtmlAttribute(valueMatch?.[1] || '');
+  }
+
+  return result;
+};
+
+const extractPostbackTargetsFromHtml = (html) => {
+  const source = String(html || '');
+  const targets = [];
+  const targetSet = new Set();
+  const pushTarget = (target) => {
+    const safe = String(target || '').trim();
+    if (!safe) return;
+    if (targetSet.has(safe)) return;
+    targetSet.add(safe);
+    targets.push(safe);
+  };
+
+  const doPostbackRegex = /__doPostBack\(\s*['"]([^'"]*downloadKarar[^'"]*)['"]/gi;
+  let postbackMatch;
+  while ((postbackMatch = doPostbackRegex.exec(source))) {
+    pushTarget(postbackMatch[1]);
+  }
+
+  const idRegex = /\bid\s*=\s*["']([^"']*downloadKarar[^"']*)["']/gi;
+  let idMatch;
+  while ((idMatch = idRegex.exec(source))) {
+    pushTarget(String(idMatch[1]).replace(/_/g, '$'));
+  }
+
+  pushTarget('ctl00$ContentPlaceHolder1$downloadKararUyuşmazlik');
+  pushTarget('ctl00$ContentPlaceHolder1$downloadKarar');
+
+  return targets;
+};
+
+const downloadViaKararPostback = async ({
+  context,
+  detailUrl,
+  downloadsDir,
+  meta,
+  minDownloadBytes,
+  enforcePdfHeader,
+}) => {
+  const safeDetailUrl = String(detailUrl || '').trim();
+  if (!safeDetailUrl) {
+    throw new Error('Detail URL missing for Karar postback download.');
+  }
+
+  const getResponse = await context.request.fetch(safeDetailUrl, {
+    method: 'GET',
+    timeout: 35_000,
+    failOnStatusCode: false,
+    headers: {
+      Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      Referer: BASE_URL,
+    },
+  });
+
+  if (!getResponse.ok()) {
+    throw new Error(`Karar detail GET failed: status=${getResponse.status()}`);
+  }
+
+  const detailHtml = await getResponse.text();
+  const hidden = collectHiddenInputsFromHtml(detailHtml);
+  if (!hidden.__VIEWSTATE) {
+    throw new Error('Karar detail page did not contain __VIEWSTATE.');
+  }
+
+  const targets = extractPostbackTargetsFromHtml(detailHtml);
+  if (!targets.length) {
+    throw new Error('Karar detail page did not expose any download postback targets.');
+  }
+
+  let lastError = null;
+  for (const eventTarget of targets) {
+    try {
+      const formPayload = { ...hidden };
+      formPayload.__EVENTTARGET = eventTarget;
+      formPayload.__EVENTARGUMENT = '';
+
+      const postResponse = await context.request.fetch(safeDetailUrl, {
+        method: 'POST',
+        timeout: 35_000,
+        failOnStatusCode: false,
+        headers: {
+          Accept: 'application/pdf,application/octet-stream,*/*',
+          Referer: safeDetailUrl,
+        },
+        form: formPayload,
+      });
+
+      if (!postResponse.ok()) {
+        throw new Error(`status=${postResponse.status()}`);
+      }
+
+      const payload = await postResponse.body();
+      if (!payload || payload.length < minDownloadBytes) {
+        throw new Error(`too-small=${payload ? payload.length : 0}`);
+      }
+
+      const headers = postResponse.headers();
+      const contentType = String(headers['content-type'] || '').toLowerCase();
+      const looksLikePdf = payload.subarray(0, 4).toString('utf8') === '%PDF';
+      if (!looksLikePdf && contentType && !contentType.includes('pdf')) {
+        throw new Error(`non-pdf-content-type=${contentType}`);
+      }
+
+      const contentDisposition = String(headers['content-disposition'] || '');
+      const headerFileName = parseContentDispositionFileName(contentDisposition);
+      const fallbackFileName = buildFallbackFileNameFromMeta(meta);
+      const targetName = ensurePdfExtension(headerFileName || fallbackFileName);
+      const targetPath = ensureUniquePath(downloadsDir, targetName);
+      await fs.promises.writeFile(targetPath, payload);
+      await waitForStableFile(targetPath);
+
+      const validation = await validateDownloadedFile({
+        targetPath,
+        minDownloadBytes,
+        enforcePdfHeader,
+      });
+
+      return {
+        status: 'downloaded',
+        fileName: path.basename(targetPath),
+        ...validation,
+        transport: 'karar-postback',
+      };
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw new Error(`Karar postback download failed: ${lastError?.message || 'unknown error'}`);
+};
+
 const buildFallbackFileNameFromMeta = (meta) => {
   const kararNo = sanitizeFileName(meta?.kararNo || '');
   const kararTarihi = sanitizeFileName(String(meta?.kararTarihi || '').replace(/[./\\]/g, '-'));
@@ -1092,6 +1251,54 @@ const clickDownloadInDetail = async ({
   try {
     if (apiFirstDownload) {
       try {
+        const postbackResult = await downloadViaKararPostback({
+          context,
+          detailUrl: popup.url(),
+          downloadsDir,
+          meta,
+          minDownloadBytes,
+          enforcePdfHeader,
+        });
+        if (idempotencyStore) {
+          const decisionKey = buildDecisionIdempotencyKey({
+            type: downloadType,
+            meta,
+            suggestedFileName: postbackResult.fileName,
+          });
+          idempotencyStore.commit(decisionKey, {
+            key: decisionKey,
+            type: downloadType,
+            kararNo: meta?.kararNo || '',
+            kararTarihi: meta?.kararTarihi || '',
+            fileName: postbackResult.fileName,
+            sha256: postbackResult.sha256,
+            sizeBytes: postbackResult.sizeBytes,
+            transport: postbackResult.transport || 'karar-postback',
+          });
+        }
+        return {
+          status: 'downloaded',
+          fileName: postbackResult.fileName,
+          sizeBytes: postbackResult.sizeBytes,
+          sha256: postbackResult.sha256,
+          transport: postbackResult.transport || 'karar-postback',
+        };
+      } catch (postbackError) {
+        if (apiFirstStrict) {
+          throw new Error(`Karar postback strict mode failed: ${postbackError?.message || String(postbackError)}`);
+        }
+        console.warn(
+          `Karar postback failed, fallback to inferred-api/ui download -> ${
+            postbackError?.message || String(postbackError)
+          }`,
+        );
+      }
+
+      try {
+        const selector = await waitForVisibleSelector(popup, SELECTORS.downloadButtons, 20000);
+        const downloadButton = popup.locator(selector).first();
+        await downloadButton.waitFor({ state: 'visible', timeout: 10000 });
+
         const apiResult = await downloadViaApiRequest({
           context,
           popup,
@@ -1132,6 +1339,10 @@ const clickDownloadInDetail = async ({
         console.warn(`API-first failed, fallback to UI download -> ${apiError?.message || String(apiError)}`);
       }
     }
+
+    const selector = await waitForVisibleSelector(popup, SELECTORS.downloadButtons, 20000);
+    const downloadButton = popup.locator(selector).first();
+    await downloadButton.waitFor({ state: 'visible', timeout: 10000 });
 
     const waitDownload = () => context.waitForEvent('download', { timeout: 30000 });
     let download;
@@ -1289,7 +1500,9 @@ const processCurrentPageRows = async ({
         duplicate: false,
       });
       console.log(
-        `Page ${pageNo}, row ${rowNo}: downloaded. transport=${result?.transport || 'unknown'} size=${
+        `Page ${pageNo}, row ${rowNo}: downloaded. file=${result?.fileName || '-'} transport=${
+          result?.transport || 'unknown'
+        } size=${
           result?.sizeBytes || 0
         } sha256=${result?.sha256 || '-'}`,
       );

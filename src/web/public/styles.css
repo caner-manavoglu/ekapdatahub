@@ -679,6 +679,7 @@ body {
   overflow: hidden;
   min-height: 0;
   height: 100%;
+  grid-row: 4;
   padding: 14px 18px 18px;
 }
 
@@ -1095,7 +1096,7 @@ body {
   width: 100%;
   flex: 1 1 auto;
   min-height: 0;
-  height: auto;
+  height: 100%;
   border: 1px solid #cad2dc;
   border-radius: 12px;
   background: #fff;
@@ -1106,6 +1107,7 @@ body {
   margin: 0;
   flex: 1 1 auto;
   min-height: 0;
+  height: 100%;
   max-height: none;
   overflow: auto;
   border: 1px solid #cad2dc;
@@ -1211,5 +1213,13 @@ body {
 
   .tab-group {
     margin-left: 0;
+  }
+
+  .doc-frame {
+    min-height: 0;
+  }
+
+  .text-block {
+    min-height: 0;
   }
 }

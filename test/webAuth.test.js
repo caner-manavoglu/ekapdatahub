@@ -148,7 +148,6 @@ test("parseEkapV3Options should support allPages mode", () => {
     startRow: 3,
     endPage: 10,
     allPages: true,
-    resumeFromLast: true,
     workerCount: 4,
     browserMode: "visible",
   });
@@ -157,7 +156,6 @@ test("parseEkapV3Options should support allPages mode", () => {
   assert.equal(parsedAllPages.startPage, 1);
   assert.equal(parsedAllPages.startRow, 3);
   assert.equal(parsedAllPages.endPage, null);
-  assert.equal(parsedAllPages.resumeFromLast, true);
   assert.equal(parsedAllPages.workerCount, 4);
   assert.equal(parsedAllPages.browserMode, "visible");
 
@@ -177,15 +175,40 @@ test("parseEkapV3Options should support allPages mode", () => {
   assert.equal(parsedRange.startPage, 3);
   assert.equal(parsedRange.startRow, 1);
   assert.equal(parsedRange.endPage, 8);
-  assert.equal(parsedRange.resumeFromLast, false);
   assert.ok(parsedRange.workerCount >= 1);
   assert.ok(parsedRange.workerCount <= 8);
+  assert.equal(Object.prototype.hasOwnProperty.call(parsedRange, "resumeFromLast"), false);
+});
+
+test("parseEkapV3Options should normalize date format and validate order", () => {
+  const parsed = _internal.parseEkapV3Options({
+    type: "mahkeme",
+    fromDate: "01.03.2026",
+    toDate: "09.03.2026",
+    allPages: true,
+  });
+  assert.equal(parsed.fromDate, "2026-03-01");
+  assert.equal(parsed.toDate, "2026-03-09");
+
+  assert.throws(
+    () =>
+      _internal.parseEkapV3Options({
+        type: "uyusmazlik",
+        fromDate: "2026-03-10",
+        toDate: "2026-03-01",
+      }),
+    /buyuk olamaz/i,
+  );
 });
 
 test("ekap v3 count payload helpers should build and parse correctly", () => {
   assert.equal(_internal.formatEkapV3CountDateBoundary("2026-03-01", "start"), "01.03.2026 00:00:00");
   assert.equal(_internal.formatEkapV3CountDateBoundary("2026-03-01", "end"), "01.03.2026 23:59:00");
   assert.equal(_internal.formatEkapV3CountDateBoundary("01.03.2026", "start"), "01.03.2026 00:00:00");
+  assert.throws(
+    () => _internal.formatEkapV3CountDateBoundary("2026-02-31", "start"),
+    /gecersiz/i,
+  );
 
   const umPayload = _internal.buildEkapV3CountPayload("uyusmazlik", "2026-03-01", "2026-03-11");
   const mkPayload = _internal.buildEkapV3CountPayload("mahkeme", "2026-03-01", "2026-03-11");
@@ -235,52 +258,6 @@ test("ekap v3 count payload helpers should build and parse correctly", () => {
   assert.equal(emptyParsed.totalCount, 0);
   assert.equal(emptyParsed.totalCountCapped, false);
   assert.equal(emptyParsed.estimatedPages, 0);
-});
-
-test("applyEkapV3ResumeOptions should advance start page from last processed page", () => {
-  const base = _internal.parseEkapV3Options({
-    type: "mahkeme",
-    fromDate: "2026-03-01",
-    toDate: "2026-03-09",
-    startPage: 1,
-    endPage: 10,
-    allPages: false,
-    resumeFromLast: true,
-    browserMode: "headless",
-  });
-
-  const resume = _internal.applyEkapV3ResumeOptions(base, {
-    _id: "run-42",
-    pagesProcessed: [1, 2, 5, 4],
-  });
-
-  assert.equal(resume.options.startPage, 6);
-  assert.equal(resume.options.endPage, 10);
-  assert.equal(resume.resumeMeta?.baseRunId, "run-42");
-  assert.equal(resume.resumeMeta?.lastProcessedPage, 5);
-  assert.equal(resume.resumeMeta?.resumedFromPage, 6);
-});
-
-test("applyEkapV3ResumeOptions should reject when selected range is already completed", () => {
-  const base = _internal.parseEkapV3Options({
-    type: "uyusmazlik",
-    fromDate: "2026-03-01",
-    toDate: "2026-03-09",
-    startPage: 3,
-    endPage: 5,
-    allPages: false,
-    resumeFromLast: true,
-    browserMode: "headless",
-  });
-
-  assert.throws(
-    () =>
-      _internal.applyEkapV3ResumeOptions(base, {
-        _id: "run-43",
-        pagesProcessed: [3, 4, 5],
-      }),
-    /tamamlan/i,
-  );
 });
 
 test("normalizeOpsBenchmarkPayload should sanitize benchmark data", () => {

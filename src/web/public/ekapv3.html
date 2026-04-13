@@ -57,7 +57,6 @@
       <section class="panel panel--detail v3-panel">
         <div class="panel__head">
           <h2>İndirme Parametreleri</h2>
-          <span id="v3RunMeta" class="meta-pill">Çalışma yok</span>
         </div>
         <div class="v3-body">
           <form id="v3Form" class="v3-form" autocomplete="off">
@@ -93,11 +92,6 @@
               <label class="v3-field v3-field--check" for="allPages">
                 <input id="allPages" type="checkbox" />
                 <span>Tüm sayfaları indir</span>
-              </label>
-
-              <label class="v3-field v3-field--check" for="resumeFromLast">
-                <input id="resumeFromLast" type="checkbox" />
-                <span>Kaldığı yerden devam et</span>
               </label>
 
               <label class="v3-field">
@@ -272,18 +266,10 @@
       <div class="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="v3ConfirmTitle">
         <h2 id="v3ConfirmTitle">Silme Onayı</h2>
         <p id="v3ConfirmMessage"></p>
-        <p class="confirm-hint">Devam etmek için <strong>onaylıyorum</strong> yazın.</p>
-        <input
-          id="v3ConfirmInput"
-          type="text"
-          autocomplete="off"
-          placeholder="onaylıyorum"
-          aria-label="EKAP v3 dosya silme onayı"
-        />
-        <p id="v3ConfirmError" class="confirm-error" hidden>Onay metni hatalı.</p>
+        <p class="confirm-hint">Bu işlem geri alınamaz. Emin misiniz?</p>
         <div class="confirm-actions">
-          <button id="v3CancelConfirmButton" type="button" class="btn btn--ghost">Vazgeç</button>
-          <button id="v3ApproveConfirmButton" type="button" class="btn btn--danger">Sil</button>
+          <button id="v3CancelConfirmButton" type="button" class="btn btn--ghost">Hayır</button>
+          <button id="v3ApproveConfirmButton" type="button" class="btn btn--danger">Evet</button>
         </div>
       </div>
     </div>

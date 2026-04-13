@@ -2,6 +2,7 @@ const axios = require("axios");
 const crypto = require("node:crypto");
 const http = require("node:http");
 const https = require("node:https");
+const path = require("node:path");
 const defaultSearchPayload = require("./defaultSearchPayload");
 
 class EkapClient {
@@ -69,6 +70,197 @@ class EkapClient {
       hits: 0,
       writes: 0,
     };
+    this.customRequestHeadersEnabled = String(process.env.EKAP_CUSTOM_REQUEST_HEADERS || "auto")
+      .trim()
+      .toLowerCase() !== "off";
+    this.customRequestHeadersTtlMs = Math.max(
+      60_000,
+      Number(process.env.EKAP_CUSTOM_REQUEST_HEADERS_TTL_MS) || 5 * 60 * 1000,
+    );
+    this.customRequestSession = null;
+    this.customRequestSessionPromise = null;
+    this.playwrightModule = null;
+  }
+
+  isEkapV2Request(url) {
+    const text = String(url || "");
+    return text.includes("ekapv2.kik.gov.tr");
+  }
+
+  shouldRetryWithFreshCustomHeaders(error) {
+    const status = Number(error?.response?.status || 0);
+    if (status === 401 || status === 403 || status === 500) {
+      return true;
+    }
+    const message = String(error?.response?.data || error?.message || "")
+      .trim()
+      .toLocaleLowerCase("tr-TR");
+    return (
+      message.includes("iv eksik") ||
+      message.includes("istek zaman aşımına uğradı") ||
+      message.includes("istek zaman asimina ugradi")
+    );
+  }
+
+  getCookieHeaderFromPlaywrightCookies(cookies) {
+    const rows = Array.isArray(cookies) ? cookies : [];
+    return rows
+      .filter((cookie) => cookie && cookie.name && cookie.value)
+      .map((cookie) => `${cookie.name}=${cookie.value}`)
+      .join("; ");
+  }
+
+  resolvePlaywrightModule() {
+    if (this.playwrightModule) {
+      return this.playwrightModule;
+    }
+    try {
+      // Prefer local dependency when available.
+      this.playwrightModule = require("playwright");
+      return this.playwrightModule;
+    } catch (_) {
+      const fallback = path.resolve(__dirname, "../ekap-v3/node_modules/playwright");
+      this.playwrightModule = require(fallback);
+      return this.playwrightModule;
+    }
+  }
+
+  async bootstrapCustomRequestSession() {
+    const { chromium } = this.resolvePlaywrightModule();
+    const browser = await chromium.launch({
+      headless: true,
+      args: ["--no-sandbox", "--disable-dev-shm-usage"],
+    });
+
+    try {
+      const context = await browser.newContext({
+        locale: "tr-TR",
+      });
+      const page = await context.newPage();
+      const targetUrl = "https://ekapv2.kik.gov.tr/ekap/search";
+      const targetApiPath = "/b_ihalearama/api/Ihale/GetListByParameters";
+
+      const request = await new Promise((resolve, reject) => {
+        let timeoutHandle = null;
+        const onRequest = (candidate) => {
+          if (candidate.method() !== "POST" || !candidate.url().includes(targetApiPath)) {
+            return;
+          }
+          if (timeoutHandle) {
+            clearTimeout(timeoutHandle);
+          }
+          page.off("request", onRequest);
+          resolve(candidate);
+        };
+
+        page.on("request", onRequest);
+        timeoutHandle = setTimeout(() => {
+          page.off("request", onRequest);
+          reject(new Error("EKAP list isteği beklenirken zaman aşımı oluştu."));
+        }, 45_000);
+
+        void page
+          .goto(targetUrl, { waitUntil: "networkidle", timeout: 60_000 })
+          .catch((error) => {
+            if (timeoutHandle) {
+              clearTimeout(timeoutHandle);
+            }
+            page.off("request", onRequest);
+            reject(error);
+          });
+      });
+      const requestHeaders = request.headers();
+
+      const allowedHeaderKeys = [
+        "x-custom-request-guid",
+        "x-custom-request-r8id",
+        "x-custom-request-siv",
+        "x-custom-request-ts",
+        "api-version",
+        "accept-language",
+        "sec-ch-ua",
+        "sec-ch-ua-mobile",
+        "sec-ch-ua-platform",
+        "user-agent",
+      ];
+      const headers = {
+        Origin: "https://ekapv2.kik.gov.tr",
+        Referer: targetUrl,
+      };
+      for (const key of allowedHeaderKeys) {
+        const value = String(requestHeaders?.[key] || "").trim();
+        if (!value) continue;
+        headers[key] = value;
+      }
+
+      const cookies = await context.cookies("https://ekapv2.kik.gov.tr");
+      const cookieHeader = this.getCookieHeaderFromPlaywrightCookies(cookies);
+      if (cookieHeader) {
+        headers.Cookie = cookieHeader;
+      }
+
+      const requiredHeaders = [
+        "x-custom-request-guid",
+        "x-custom-request-r8id",
+        "x-custom-request-siv",
+        "x-custom-request-ts",
+      ];
+      const missing = requiredHeaders.filter((key) => !headers[key]);
+      if (missing.length > 0) {
+        throw new Error(`EKAP custom headers bulunamadi: ${missing.join(", ")}`);
+      }
+
+      return {
+        headers,
+        expiresAt: Date.now() + this.customRequestHeadersTtlMs,
+      };
+    } finally {
+      await browser.close().catch(() => {});
+    }
+  }
+
+  async ensureCustomRequestSession(forceRefresh = false) {
+    if (!this.customRequestHeadersEnabled) {
+      return null;
+    }
+    if (!forceRefresh && this.customRequestSession && this.customRequestSession.expiresAt > Date.now()) {
+      return this.customRequestSession;
+    }
+    if (!forceRefresh && this.customRequestSessionPromise) {
+      return this.customRequestSessionPromise;
+    }
+
+    const loader = (async () => {
+      const session = await this.bootstrapCustomRequestSession();
+      this.customRequestSession = session;
+      return session;
+    })();
+
+    this.customRequestSessionPromise = loader;
+    try {
+      return await loader;
+    } finally {
+      if (this.customRequestSessionPromise === loader) {
+        this.customRequestSessionPromise = null;
+      }
+    }
+  }
+
+  async postJsonWithPossibleCustomHeaders(url, body, conditionalHeaders, forceRefreshCustomHeaders = false) {
+    const headers = {
+      ...(conditionalHeaders || {}),
+    };
+    if (this.customRequestHeadersEnabled && this.isEkapV2Request(url)) {
+      const session = await this.ensureCustomRequestSession(forceRefreshCustomHeaders);
+      if (session?.headers) {
+        Object.assign(headers, session.headers);
+      }
+    }
+
+    return this.http.post(url, body, {
+      headers: Object.keys(headers).length > 0 ? headers : undefined,
+      validateStatus: (status) => (status >= 200 && status < 300) || status === 304,
+    });
   }
 
   buildConditionalKey(url, payload) {
@@ -248,10 +440,26 @@ class EkapClient {
       this.conditionalStats.validatorsUsed += 1;
     }
 
-    const response = await this.http.post(url, body, {
-      headers: hasConditionalHeaders ? conditionalHeaders : undefined,
-      validateStatus: (status) => (status >= 200 && status < 300) || status === 304,
-    });
+    let response;
+    try {
+      response = await this.postJsonWithPossibleCustomHeaders(
+        url,
+        body,
+        hasConditionalHeaders ? conditionalHeaders : undefined,
+        false,
+      );
+    } catch (error) {
+      if (this.customRequestHeadersEnabled && this.isEkapV2Request(url) && this.shouldRetryWithFreshCustomHeaders(error)) {
+        response = await this.postJsonWithPossibleCustomHeaders(
+          url,
+          body,
+          hasConditionalHeaders ? conditionalHeaders : undefined,
+          true,
+        );
+      } else {
+        throw error;
+      }
+    }
 
     if (response.status === 304) {
       if (cacheEntry && cacheEntry.data !== undefined) {
@@ -276,7 +484,7 @@ class EkapClient {
 
       // 304 response without local cache should not break the flow.
       this.conditionalStats.fallbackAfter304 += 1;
-      const fallbackResponse = await this.http.post(url, body);
+      const fallbackResponse = await this.postJsonWithPossibleCustomHeaders(url, body, undefined, false);
       const fallbackData = fallbackResponse.data || {};
       this.updateConditionalCacheFromResponse(key, fallbackResponse, fallbackData);
       this.setResponseCacheEntry(key, fallbackData);

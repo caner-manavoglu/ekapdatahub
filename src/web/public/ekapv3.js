@@ -49,7 +49,6 @@ const el = {
   startPage: document.getElementById("startPage"),
   endPage: document.getElementById("endPage"),
   allPages: document.getElementById("allPages"),
-  resumeFromLast: document.getElementById("resumeFromLast"),
   browserMode: document.getElementById("browserMode"),
   workerCount: document.getElementById("workerCount"),
   startButton: document.getElementById("startButton"),
@@ -92,8 +91,6 @@ const el = {
   confirmOverlay: document.getElementById("v3ConfirmOverlay"),
   confirmTitle: document.getElementById("v3ConfirmTitle"),
   confirmMessage: document.getElementById("v3ConfirmMessage"),
-  confirmInput: document.getElementById("v3ConfirmInput"),
-  confirmError: document.getElementById("v3ConfirmError"),
   cancelConfirmButton: document.getElementById("v3CancelConfirmButton"),
   approveConfirmButton: document.getElementById("v3ApproveConfirmButton"),
 };
@@ -146,10 +143,57 @@ function parsePositiveInt(value, fallback) {
   return parsed;
 }
 
+function parseHtmlDateInput(value) {
+  const normalized = String(value || "").trim();
+  const match = normalized.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) {
+    return null;
+  }
+  const year = Number.parseInt(match[1], 10);
+  const month = Number.parseInt(match[2], 10);
+  const day = Number.parseInt(match[3], 10);
+  if (month < 1 || month > 12 || day < 1 || day > 31) {
+    return null;
+  }
+  const utcMs = Date.UTC(year, month - 1, day);
+  const check = new Date(utcMs);
+  if (
+    check.getUTCFullYear() !== year ||
+    check.getUTCMonth() + 1 !== month ||
+    check.getUTCDate() !== day
+  ) {
+    return null;
+  }
+  return {
+    normalized,
+  };
+}
+
 function clampPage(value, totalPages) {
   const page = parsePositiveInt(value, 1);
   const safeTotal = Math.max(1, parsePositiveInt(totalPages, 1));
   return Math.min(page, safeTotal);
+}
+
+function syncDateInputBounds() {
+  const fromParsed = parseHtmlDateInput(el.fromDate?.value);
+  const toParsed = parseHtmlDateInput(el.toDate?.value);
+
+  if (el.toDate) {
+    if (fromParsed) {
+      el.toDate.min = fromParsed.normalized;
+    } else {
+      el.toDate.removeAttribute("min");
+    }
+  }
+
+  if (el.fromDate) {
+    if (toParsed) {
+      el.fromDate.max = toParsed.normalized;
+    } else {
+      el.fromDate.removeAttribute("max");
+    }
+  }
 }
 
 function formatPageRange(runLike) {
@@ -166,8 +210,35 @@ function formatPageRange(runLike) {
   return `${startPage}-${endPage}`;
 }
 
+function extractDownloadedPdfName(message) {
+  const text = String(message || "").trim();
+  if (!/:\s+downloaded\./i.test(text)) {
+    return "";
+  }
+  const fileMatch = text.match(/\bfile=([^\s]+)/i);
+  if (fileMatch && fileMatch[1] && fileMatch[1] !== "-") {
+    return fileMatch[1];
+  }
+  return "";
+}
+
+function getDownloadLogEntries() {
+  const rows = Array.isArray(state.logs) ? state.logs : [];
+  return rows
+    .map((entry) => {
+      const fileName = extractDownloadedPdfName(entry?.message);
+      if (!fileName) return null;
+      return {
+        ...entry,
+        fileName,
+      };
+    })
+    .filter(Boolean);
+}
+
 function getLogTotalPages() {
-  return Math.max(1, Math.ceil((state.logs.length || 0) / state.logLimit));
+  const total = getDownloadLogEntries().length;
+  return Math.max(1, Math.ceil(total / state.logLimit));
 }
 
 function applyAllPagesUi() {
@@ -186,10 +257,6 @@ function applyAllPagesUi() {
       input.removeAttribute("aria-disabled");
     }
   });
-}
-
-function normalizeConfirmation(value) {
-  return String(value || "").trim().toLocaleLowerCase("tr-TR");
 }
 
 function buildFileKey(type, fileName) {
@@ -297,16 +364,23 @@ function withAsyncStatus(handler, fallbackMessage = "İşlem başarısız.") {
 }
 
 function readFormPayload() {
-  const fromDate = String(el.fromDate.value || "").trim();
-  const toDate = String(el.toDate.value || "").trim();
+  const fromDateInput = String(el.fromDate.value || "").trim();
+  const toDateInput = String(el.toDate.value || "").trim();
+  const fromParsed = parseHtmlDateInput(fromDateInput);
+  const toParsed = parseHtmlDateInput(toDateInput);
   const allPages = Boolean(el.allPages.checked);
-  const resumeFromLast = Boolean(el.resumeFromLast?.checked);
   const startPage = allPages ? 1 : parsePositiveInt(el.startPage.value, 1);
   const endPage = allPages ? null : parsePositiveInt(el.endPage.value, startPage);
   const workerCount = Math.min(8, Math.max(1, parsePositiveInt(el.workerCount?.value, 1)));
 
-  if (!fromDate || !toDate) {
+  if (!fromDateInput || !toDateInput) {
     throw new Error("Başlangıç ve bitiş tarihi zorunlu.");
+  }
+  if (!fromParsed || !toParsed) {
+    throw new Error("Tarih formatı geçersiz. Lütfen YYYY-MM-DD formatı kullanın.");
+  }
+  if (fromParsed.normalized > toParsed.normalized) {
+    throw new Error("Başlangıç tarihi bitiş tarihinden büyük olamaz.");
   }
   if (!allPages && endPage < startPage) {
     throw new Error("Bitiş sayfası başlangıç sayfasından küçük olamaz.");
@@ -314,12 +388,11 @@ function readFormPayload() {
 
   return {
     type: el.jobType.value === "uyusmazlik" ? "uyusmazlik" : "mahkeme",
-    fromDate,
-    toDate,
+    fromDate: fromParsed.normalized,
+    toDate: toParsed.normalized,
     startPage,
     endPage,
     allPages,
-    resumeFromLast,
     workerCount,
     browserMode: el.browserMode.value === "visible" ? "visible" : "headless",
   };
@@ -351,14 +424,14 @@ function renderStatus() {
       const runId = String(run.runId || "-");
       const startedAt = formatDate(run.startedAt);
       const workerInfo = ` | Worker: ${Number(run.workerCount || 1)}`;
-      const resumeInfo =
-        run.resumeApplied && Number(run.resumeFromPage || 0) > 0
-          ? ` | Devam: s.${run.resumeFromPage}`
-          : "";
       const progressInfo = ` | İndirilen: ${downloadedProgress} | İşlenen: ${processedCount} | Hata: ${failedCount} | Retry: ${retryCount} | Dup: ${duplicateCount} | Toplam: ${totalTargetCountLabel}`;
-      el.runMeta.textContent = `run:${runId} | ${startedAt} | ${run.type} | ${run.fromDate} -> ${run.toDate} | ${formatPageRange(run)}${workerInfo}${resumeInfo}${progressInfo}`;
+      if (el.runMeta) {
+        el.runMeta.textContent = `run:${runId} | ${startedAt} | ${run.type} | ${run.fromDate} -> ${run.toDate} | ${formatPageRange(run)}${workerInfo}${progressInfo}`;
+      }
     } else {
-      el.runMeta.textContent = "Çalışıyor";
+      if (el.runMeta) {
+        el.runMeta.textContent = "Çalışıyor";
+      }
     }
     return;
   }
@@ -372,19 +445,19 @@ function renderStatus() {
     } else {
       setStatus("Hata", "error");
     }
-    const resumeInfo =
-      r.resumeApplied && Number(r.resumeFromPage || 0) > 0
-        ? ` | Devam: s.${r.resumeFromPage}`
-        : "";
     const runId = String(r.runId || "-");
     const startedAt = formatDate(r.startedAt);
     const workerInfo = ` | Worker: ${Number(r.workerCount || 1)}`;
-    el.runMeta.textContent = `run:${runId} | ${startedAt} | ${r.type} | ${r.fromDate} -> ${r.toDate} | ${formatPageRange(r)}${workerInfo}${resumeInfo}`;
+    if (el.runMeta) {
+      el.runMeta.textContent = `run:${runId} | ${startedAt} | ${r.type} | ${r.fromDate} -> ${r.toDate} | ${formatPageRange(r)}${workerInfo}`;
+    }
     return;
   }
 
   setStatus("Hazır");
-  el.runMeta.textContent = "Çalışma yok";
+  if (el.runMeta) {
+    el.runMeta.textContent = "Çalışma yok";
+  }
 }
 
 function formatMetricValue(value) {
@@ -463,15 +536,16 @@ function renderOpsDashboard() {
 }
 
 function renderLogs() {
-  const total = state.logs.length;
+  const downloadRows = getDownloadLogEntries();
+  const total = downloadRows.length;
   const totalPages = getLogTotalPages();
   state.logPage = clampPage(state.logPage, totalPages);
 
   const startIndex = (state.logPage - 1) * state.logLimit;
-  const rows = state.logs.slice(startIndex, startIndex + state.logLimit);
+  const rows = downloadRows.slice(startIndex, startIndex + state.logLimit);
 
-  el.logMeta.textContent = `${total} kayıt`;
-  el.clearLogsButton.disabled = total === 0;
+  el.logMeta.textContent = `${total} PDF`;
+  el.clearLogsButton.disabled = state.logs.length === 0;
   el.logPageInfo.textContent = `Sayfa ${state.logPage} / ${totalPages}`;
   el.logFirstButton.disabled = state.logPage <= 1;
   el.logPrevButton.disabled = state.logPage <= 1;
@@ -483,18 +557,13 @@ function renderLogs() {
   }
 
   if (!rows.length) {
-    el.liveLog.textContent = "Henüz log yok.";
+    el.liveLog.textContent = "Henüz indirilen PDF yok.";
     return;
   }
 
   const viewingLatest = state.logPage === totalPages;
 
-  el.liveLog.textContent = rows
-    .map((entry) => {
-      const level = String(entry?.level || "info").toUpperCase();
-      return `[${formatDate(entry?.timestamp)}] [${level}] ${entry?.message || ""}`;
-    })
-    .join("\n");
+  el.liveLog.textContent = rows.map((entry) => entry.fileName).join("\n");
   if (viewingLatest) {
     el.liveLog.scrollTop = el.liveLog.scrollHeight;
   }
@@ -528,11 +597,6 @@ function renderHistory() {
       const processedPages = Array.isArray(row?.pagesProcessed) && row.pagesProcessed.length
         ? row.pagesProcessed.join(", ")
         : "-";
-      const resumeSummary = row?.resume?.applied
-        ? `resume:s.${row?.resume?.resumedFromPage ?? "-"}`
-        : row?.resume?.requested
-          ? "resume:istek"
-          : "resume:-";
       const totalTargetCountRaw = Number(row?.totalTargetCount || 0);
       const hasKnownTotal = Number.isFinite(totalTargetCountRaw) && totalTargetCountRaw > 0;
       const targetLabel = hasKnownTotal
@@ -541,7 +605,7 @@ function renderHistory() {
       const duplicateCount = Number(row?.duplicateCount || 0);
       const result = `ok:${row?.downloadedCount || 0} / fail:${row?.failedCount || 0} / hedef:${targetLabel} / worker:${Number(
         row?.workerCount || 1,
-      )} / dup:${duplicateCount} / ${resumeSummary}`;
+      )} / dup:${duplicateCount}`;
       return `<tr>
   <td>${escapeHtml(formatDate(row?.startedAt))}</td>
   <td>${escapeHtml(row?.type || "-")}</td>
@@ -602,7 +666,7 @@ async function refreshStatus() {
   const wasRunning = state.running;
   const payload = await fetchJson("/api/ekapv3/status");
   const data = payload?.data || {};
-  const previousLogTotalPages = Math.max(1, Math.ceil((state.logs.length || 0) / state.logLimit));
+  const previousLogTotalPages = Math.max(1, Math.ceil(getDownloadLogEntries().length / state.logLimit));
   const wasViewingLatestLogs = state.logPage >= previousLogTotalPages;
 
   state.running = Boolean(data.running);
@@ -611,7 +675,7 @@ async function refreshStatus() {
   state.lastRun = data.lastRun || null;
   state.logs = Array.isArray(data.logs) ? data.logs : [];
 
-  const nextLogTotalPages = Math.max(1, Math.ceil((state.logs.length || 0) / state.logLimit));
+  const nextLogTotalPages = Math.max(1, Math.ceil(getDownloadLogEntries().length / state.logLimit));
   state.logPage = wasViewingLatestLogs ? nextLogTotalPages : clampPage(state.logPage, nextLogTotalPages);
 
   renderStatus();
@@ -676,12 +740,10 @@ function openConfirmationDialog({ title, message, action }) {
   state.pendingDeleteAction = action;
   el.confirmTitle.textContent = title;
   el.confirmMessage.textContent = message;
-  el.confirmInput.value = "";
-  el.confirmError.hidden = true;
   el.cancelConfirmButton.disabled = false;
   el.approveConfirmButton.disabled = false;
   el.confirmOverlay.hidden = false;
-  el.confirmInput.focus();
+  el.cancelConfirmButton.focus();
 }
 
 function closeConfirmationDialog() {
@@ -691,8 +753,6 @@ function closeConfirmationDialog() {
   state.pendingDeleteAction = null;
   state.confirmBusy = false;
   el.confirmOverlay.hidden = true;
-  el.confirmInput.value = "";
-  el.confirmError.hidden = true;
   el.cancelConfirmButton.disabled = false;
   el.approveConfirmButton.disabled = false;
 
@@ -706,7 +766,7 @@ function closeConfirmationDialog() {
 function getDialogFocusableElements() {
   return Array.from(
     el.confirmOverlay.querySelectorAll(
-      'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
+      'button:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
     ),
   );
 }
@@ -893,6 +953,14 @@ el.form.addEventListener(
 
 el.allPages.addEventListener("change", () => {
   applyAllPagesUi();
+});
+
+el.fromDate?.addEventListener("change", () => {
+  syncDateInputBounds();
+});
+
+el.toDate?.addEventListener("change", () => {
+  syncDateInputBounds();
 });
 
 el.logPrevButton.addEventListener("click", () => {
@@ -1166,11 +1234,7 @@ el.approveConfirmButton.addEventListener(
       return;
     }
 
-    const confirmation = normalizeConfirmation(el.confirmInput.value);
-    if (confirmation !== DELETE_CONFIRMATION_TEXT) {
-      el.confirmError.hidden = false;
-      return;
-    }
+    const confirmation = DELETE_CONFIRMATION_TEXT;
 
     state.confirmBusy = true;
     el.approveConfirmButton.disabled = true;
@@ -1200,6 +1264,7 @@ el.approveConfirmButton.addEventListener(
   const dd = String(now.getDate()).padStart(2, "0");
   el.fromDate.value = `${yyyy}-${mm}-01`;
   el.toDate.value = `${yyyy}-${mm}-${dd}`;
+  syncDateInputBounds();
   applyAllPagesUi();
 
   try {
