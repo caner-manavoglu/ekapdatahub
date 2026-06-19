@@ -63,8 +63,8 @@ test("ekap v3 page should not include downloads page nav link", () => {
 
   assert.doesNotMatch(ekapv3Html, /href="\/indirilenler"/);
   assert.match(ekapv3Html, /id="allPages"/);
-  assert.match(ekapv3Html, /id="workerCount"/);
+  assert.doesNotMatch(ekapv3Html, /id="workerCount"/);
   assert.match(ekapv3Html, /id="v3OpsMeta"/);
   assert.match(ekapv3Html, /id="v3OpsKpis"/);
-  assert.match(ekapv3Html, /id="v3OpsAlertsList"/);
+  assert.doesNotMatch(ekapv3Html, /id="v3OpsAlertsList"/);
 });

@@ -18,3 +18,8 @@ ekap-v3/**/*.part
 
 # Generated PDF output
 reports/pdfs/
+
+# Local/runtime artifacts (not for VCS)
+.tmp/
+.playwright-mcp/
+.cache/
