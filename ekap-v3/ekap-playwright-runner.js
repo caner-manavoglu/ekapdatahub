@@ -1187,9 +1187,12 @@ const clickSearch = async (page) => {
   await clickLocator(searchButton);
 };
 
-const clickMahkemeKararlariTab = async (page) => {
+// Tur turune gore dogru sekmeyi (Uyusmazlik/Mahkeme Kararlari) acikca secer.
+// Default sekme durumuna guvenmez; EKAP UI degisse bile dogru tur indirilir.
+const selectKararTab = async (page, { mahkeme }) => {
+  const keyword = mahkeme ? 'mahkeme' : 'uyusmazlik';
   await page.waitForFunction(
-    () => {
+    (kw) => {
       const normalize = (value) =>
         String(value || '')
           .toLocaleLowerCase('tr-TR')
@@ -1197,17 +1200,21 @@ const clickMahkemeKararlariTab = async (page) => {
           .normalize('NFD')
           .replace(/[\u0300-\u036f]/g, '');
 
+      const isActive = (el) => /active|selected|dx-tab-selected/.test(el.className || '');
+
       const tabs = Array.from(document.querySelectorAll('div#tab-item.tab-item, div.tab-item')).filter(
         (el) => el.offsetParent !== null,
       );
       const target = tabs.find((el) => {
         const text = normalize(el.textContent || '');
-        return text.includes('mahkeme') && text.includes('karar');
+        return text.includes(kw) && text.includes('karar');
       });
       if (!target) return false;
+      if (isActive(target)) return true;
       target.click();
-      return true;
+      return isActive(target);
     },
+    keyword,
     { timeout: 20000 },
   );
 
@@ -1638,9 +1645,7 @@ const setupSearchPage = async ({ context, cfg, fromDate, toDate, dateInputIndex,
     task: async () => {
       await openKurulKararlariSearchPage(page);
 
-      if (cfg.useMahkemeTab) {
-        await clickMahkemeKararlariTab(page);
-      }
+      await selectKararTab(page, { mahkeme: Boolean(cfg.useMahkemeTab) });
 
       await openDateRangePicker(page, dateInputIndex);
       await selectDateCell(page, fromDate);

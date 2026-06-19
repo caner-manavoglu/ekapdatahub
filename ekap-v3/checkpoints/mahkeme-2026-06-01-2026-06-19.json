@@ -5,24 +5,24 @@
     "fromDate": "2026/06/01",
     "toDate": "2026/06/19"
   },
-  "updatedAt": "2026-06-19T10:56:23.420Z",
+  "updatedAt": "2026-06-19T14:06:35.049Z",
   "lastProcessed": {
     "page": 1,
     "row": 2,
-    "at": "2026-06-19T10:56:22.985Z"
+    "at": "2026-06-19T14:06:34.599Z"
   },
   "lastSuccess": {
     "page": 1,
-    "row": 1,
-    "at": "2026-06-19T10:56:17.520Z"
+    "row": 2,
+    "at": "2026-06-19T14:06:34.599Z"
   },
   "totals": {
-    "downloaded": 1,
-    "failed": 1,
+    "downloaded": 2,
+    "failed": 0,
     "retries": 0,
     "duplicates": 0
   },
-  "finishedAt": "2026-06-19T10:56:23.420Z",
+  "finishedAt": "2026-06-19T14:06:35.049Z",
   "summary": {
     "status": "failed",
     "error": "page.evaluate: Target page, context or browser has been closed"
