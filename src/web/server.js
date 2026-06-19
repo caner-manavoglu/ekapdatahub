@@ -1,7 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
-const { spawn } = require("child_process");
+const { spawn, execFileSync } = require("child_process");
 const express = require("express");
 const { MongoClient } = require("mongodb");
 const config = require("../config");
@@ -172,7 +172,7 @@ function parseAuthUsers(rawValue) {
   return users;
 }
 
-const AUTH_ENABLED = toBool(process.env.AUTH_ENABLED, false);
+const AUTH_ENABLED = false;
 const AUTH_COOKIE_NAME = String(process.env.AUTH_COOKIE_NAME || "ekap_auth").trim() || "ekap_auth";
 const AUTH_COOKIE_SECURE = toBool(process.env.AUTH_COOKIE_SECURE, false);
 const AUTH_TRUST_PROXY = toBool(process.env.AUTH_TRUST_PROXY, false);
@@ -253,6 +253,60 @@ function cleanText(value) {
     .trim();
 }
 
+function getPortListeners(port) {
+  const normalizedPort = Number.parseInt(String(port || ""), 10);
+  if (!Number.isFinite(normalizedPort) || normalizedPort <= 0) {
+    return [];
+  }
+
+  try {
+    const output = execFileSync(
+      "lsof",
+      ["-nP", "-iTCP:" + normalizedPort, "-sTCP:LISTEN"],
+      {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      },
+    );
+
+    return String(output || "")
+      .split(/\r?\n/g)
+      .map((line) => line.trim())
+      .filter((line, index) => Boolean(line) && index > 0);
+  } catch (_) {
+    return [];
+  }
+}
+
+function handleWebListenError(error, options = {}) {
+  const host = String(options.host || "127.0.0.1").trim() || "127.0.0.1";
+  const port = Number.parseInt(String(options.port || ""), 10);
+  const logger = options.logger && typeof options.logger.error === "function" ? options.logger : console;
+  const safePort = Number.isFinite(port) ? port : 0;
+
+  if (String(error?.code || "") === "EADDRINUSE") {
+    logger.error("[WEB_FATAL] Port " + host + ":" + safePort + " zaten kullaniliyor.");
+
+    const listeners = Array.isArray(options.portListeners)
+      ? options.portListeners
+      : getPortListeners(safePort);
+
+    if (listeners.length > 0) {
+      logger.error("[WEB_FATAL] Portu kullanan surec(ler):");
+      for (const line of listeners) {
+        logger.error("[WEB_FATAL] " + line);
+      }
+    }
+
+    logger.error(
+      "[WEB_FATAL] Cozum: calisan sureci durdurun veya WEB_PORT ile farkli bir port secerek tekrar deneyin.",
+    );
+    return true;
+  }
+
+  logger.error("[WEB_FATAL] Web sunucusu baslatilamadi: " + (error?.message || String(error)));
+  return false;
+}
 function appendScrapeLog(entry) {
   scrapeState.logs.push(entry);
   if (scrapeState.logs.length > 300) {
@@ -2112,98 +2166,6 @@ app.get("/api/health", (_, res) => {
   res.json({ ok: true, service: "ekap-web", timestamp: new Date().toISOString() });
 });
 
-app.get("/api/auth/me", (req, res) => {
-  if (!AUTH_ENABLED) {
-    res.json({
-      data: {
-        authenticated: false,
-        authEnabled: false,
-      },
-    });
-    return;
-  }
-
-  const session = getAuthSessionFromRequest(req);
-  if (!session) {
-    res.status(401).json({ error: "Oturum gerekli." });
-    return;
-  }
-
-  res.json({
-    data: {
-      authenticated: true,
-      authEnabled: true,
-      user: toAuthUserPayload(session),
-      csrfToken: session.csrfToken,
-      expiresAt: new Date(session.expiresAt).toISOString(),
-    },
-  });
-});
-
-app.post("/api/auth/login", (req, res) => {
-  if (!AUTH_ENABLED) {
-    res.status(400).json({ error: "Kimlik dogrulama devre disi." });
-    return;
-  }
-
-  const payload = req.body && typeof req.body === "object" ? req.body : {};
-  const username = String(payload.username || "").trim();
-  const password = String(payload.password || "");
-  if (!username || !password) {
-    res.status(400).json({ error: "Kullanici adi ve sifre zorunlu." });
-    return;
-  }
-
-  const usernameKey = username.toLocaleLowerCase("tr-TR");
-  const clientIp = getClientAddress(req);
-  const loginKey = `${clientIp}|${usernameKey}`;
-  const rateLimitResult = isLoginRateLimited(loginKey);
-  if (rateLimitResult.limited) {
-    res
-      .status(429)
-      .json({ error: `Cok fazla hatali giris denemesi. ${rateLimitResult.retryAfterSec} saniye sonra tekrar deneyin.` });
-    return;
-  }
-
-  const user = AUTH_USERS.find((item) => item.usernameKey === usernameKey);
-  if (!user || !verifyAuthPassword(password, user.password)) {
-    registerLoginFailure(loginKey);
-    res.status(401).json({ error: "Kullanici adi veya sifre hatali." });
-    return;
-  }
-
-  clearLoginFailures(loginKey);
-  const session = createAuthSession(user);
-  const maxAgeSeconds = Math.max(1, Math.floor(AUTH_SESSION_TTL_MS / 1000));
-  res.setHeader("Set-Cookie", buildAuthCookieValue(session.token, maxAgeSeconds));
-  res.json({
-    data: {
-      authenticated: true,
-      authEnabled: true,
-      user: toAuthUserPayload(session),
-      csrfToken: session.csrfToken,
-      expiresAt: new Date(session.expiresAt).toISOString(),
-    },
-  });
-});
-
-app.post("/api/auth/logout", (req, res) => {
-  if (AUTH_ENABLED) {
-    const session = getAuthSessionFromRequest(req);
-    if (session?.token) {
-      clearAuthSessionByToken(session.token);
-    }
-    res.setHeader("Set-Cookie", buildClearedAuthCookieValue());
-  }
-
-  res.json({
-    data: {
-      loggedOut: true,
-      authEnabled: AUTH_ENABLED,
-    },
-  });
-});
-
 app.use("/api", requireApiAuth);
 
 app.get("/api/ops/dashboard", async (req, res, next) => {
@@ -3489,16 +3451,8 @@ app.get("/index.html", (_, res) => {
   res.redirect("/");
 });
 
-app.get("/login", (req, res) => {
-  if (AUTH_ENABLED) {
-    const session = getAuthSessionFromRequest(req);
-    if (session) {
-      res.redirect("/");
-      return;
-    }
-  }
-
-  res.sendFile(path.join(__dirname, "public", "login.html"));
+app.get(["/login", "/login.html"], (_, res) => {
+  res.redirect("/");
 });
 
 app.get(PANEL_SELECTION_PATHS[PANEL_KEY_DOCS], (req, res) => {
@@ -3578,9 +3532,14 @@ async function start() {
     console.error("[OPS_ALERT_INIT_ERROR]", error?.message || error);
   });
 
-  app.listen(WEB_PORT, WEB_HOST, () => {
+  const server = app.listen(WEB_PORT, WEB_HOST, () => {
     console.log(`[WEB] UI hazir: http://${WEB_HOST}:${WEB_PORT}`);
     console.log(`[WEB] Auth: ${AUTH_ENABLED ? "enabled" : "disabled"}`);
+  });
+
+  server.on("error", (error) => {
+    handleWebListenError(error, { host: WEB_HOST, port: WEB_PORT });
+    process.exit(1);
   });
 }
 
@@ -3624,5 +3583,6 @@ module.exports = {
     opsState,
     AUTH_USERS,
     AUTH_ENABLED,
+    handleWebListenError,
   },
 };

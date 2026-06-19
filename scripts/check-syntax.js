@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+const fs = require("fs");
 const { execFileSync, spawnSync } = require("child_process");
 
 function listTrackedJavaScriptFiles() {
@@ -10,7 +11,7 @@ function listTrackedJavaScriptFiles() {
   return output
     .split("\0")
     .map((value) => value.trim())
-    .filter(Boolean);
+    .filter((value) => Boolean(value) && fs.existsSync(value));
 }
 
 function main() {

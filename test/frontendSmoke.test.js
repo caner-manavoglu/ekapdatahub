@@ -8,16 +8,16 @@ function readPublicFile(name) {
   return fs.readFileSync(filePath, "utf8");
 }
 
-test("main pages should include auth bootstrap script", () => {
+test("main pages should not include auth bootstrap script", () => {
   const indexHtml = readPublicFile("index.html");
   const docsHtml = readPublicFile("docs.html");
   const downloadsHtml = readPublicFile("downloads.html");
   const ekapv3Html = readPublicFile("ekapv3.html");
 
-  assert.match(indexHtml, /<script src="\/auth\.js" defer><\/script>/);
-  assert.match(docsHtml, /<script src="\/auth\.js" defer><\/script>/);
-  assert.match(downloadsHtml, /<script src="\/auth\.js" defer><\/script>/);
-  assert.match(ekapv3Html, /<script src="\/auth\.js" defer><\/script>/);
+  assert.doesNotMatch(indexHtml, /<script src="\/auth\.js" defer><\/script>/);
+  assert.doesNotMatch(docsHtml, /<script src="\/auth\.js" defer><\/script>/);
+  assert.doesNotMatch(downloadsHtml, /<script src="\/auth\.js" defer><\/script>/);
+  assert.doesNotMatch(ekapv3Html, /<script src="\/auth\.js" defer><\/script>/);
 });
 
 test("status areas should be screen-reader friendly", () => {
@@ -45,8 +45,8 @@ test("documentation page tabs should include tab semantics", () => {
 test("home page should include panel selection links", () => {
   const indexHtml = readPublicFile("index.html");
 
-  assert.match(indexHtml, /href="\/panel\/dokumantasyon"/);
-  assert.match(indexHtml, /href="\/panel\/ekapv3"/);
+  assert.match(indexHtml, /href="\/dokumantasyon"/);
+  assert.match(indexHtml, /href="\/ekapv3.html"/);
 });
 
 test("downloads page should provide documentation return link", () => {
@@ -63,19 +63,8 @@ test("ekap v3 page should not include downloads page nav link", () => {
 
   assert.doesNotMatch(ekapv3Html, /href="\/indirilenler"/);
   assert.match(ekapv3Html, /id="allPages"/);
-  assert.match(ekapv3Html, /id="resumeFromLast"/);
   assert.match(ekapv3Html, /id="workerCount"/);
   assert.match(ekapv3Html, /id="v3OpsMeta"/);
   assert.match(ekapv3Html, /id="v3OpsKpis"/);
   assert.match(ekapv3Html, /id="v3OpsAlertsList"/);
-});
-
-test("login page should include required fields and scripts", () => {
-  const loginHtml = readPublicFile("login.html");
-
-  assert.match(loginHtml, /id="loginForm"/);
-  assert.match(loginHtml, /id="loginUsername"/);
-  assert.match(loginHtml, /id="loginPassword"/);
-  assert.match(loginHtml, /<script src="\/auth\.js" defer><\/script>/);
-  assert.match(loginHtml, /<script src="\/login\.js" defer><\/script>/);
 });

@@ -28,9 +28,6 @@ function parseArgs(argv) {
     maxRegressionPct: 20,
     outputDir: ".ops/benchmarks",
     baseline: "",
-    cookie: process.env.OPS_BENCHMARK_COOKIE || "",
-    username: process.env.OPS_BENCHMARK_USERNAME || "",
-    password: process.env.OPS_BENCHMARK_PASSWORD || "",
     saveRemote: false,
     source: "ops-benchmark-script",
   };
@@ -48,9 +45,6 @@ function parseArgs(argv) {
     else if (key === "maxRegressionPct") args.maxRegressionPct = Math.max(1, toNumber(value, args.maxRegressionPct));
     else if (key === "outputDir") args.outputDir = value || args.outputDir;
     else if (key === "baseline") args.baseline = value;
-    else if (key === "cookie") args.cookie = value;
-    else if (key === "username") args.username = value;
-    else if (key === "password") args.password = value;
     else if (key === "saveRemote") args.saveRemote = ["1", "true", "yes", "on"].includes(value.toLowerCase());
     else if (key === "source") args.source = value || args.source;
   }
@@ -74,52 +68,6 @@ function percentile(values, p) {
   if (lower === upper) return sorted[lower];
   const weight = rank - lower;
   return sorted[lower] + (sorted[upper] - sorted[lower]) * weight;
-}
-
-function buildHeaders(cookie, csrfToken) {
-  const headers = {};
-  if (cookie) {
-    headers.Cookie = cookie;
-  }
-  if (csrfToken) {
-    headers["x-csrf-token"] = csrfToken;
-  }
-  return headers;
-}
-
-async function loginAndGetSession(baseUrl, username, password) {
-  if (!username || !password) {
-    return {
-      cookie: "",
-      csrfToken: "",
-    };
-  }
-
-  const response = await fetch(`${baseUrl}/api/auth/login`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ username, password }),
-  });
-  const text = await response.text();
-  let payload = {};
-  try {
-    payload = text ? JSON.parse(text) : {};
-  } catch (_) {
-    payload = {};
-  }
-
-  if (!response.ok) {
-    throw new Error(payload?.error || `Login failed: ${response.status}`);
-  }
-
-  const setCookie = response.headers.get("set-cookie");
-  const cookie = String(setCookie || "").split(";")[0] || "";
-  return {
-    cookie,
-    csrfToken: String(payload?.data?.csrfToken || "").trim(),
-  };
 }
 
 async function timedFetch(url, options = {}) {
@@ -203,11 +151,10 @@ function buildRegressionDiff(currentSummary, baselineSummary, maxRegressionPct) 
   return regressions;
 }
 
-async function postBenchmarkSnapshot(baseUrl, snapshot, cookie, csrfToken) {
+async function postBenchmarkSnapshot(baseUrl, snapshot) {
   const response = await fetch(`${baseUrl}/api/ops/benchmark`, {
     method: "POST",
     headers: {
-      ...buildHeaders(cookie, csrfToken),
       "Content-Type": "application/json",
     },
     body: JSON.stringify(snapshot),
@@ -234,11 +181,6 @@ async function main() {
     throw new Error("baseUrl bos olamaz.");
   }
 
-  const sessionFromLogin = await loginAndGetSession(baseUrl, args.username, args.password);
-  const cookie = args.cookie || sessionFromLogin.cookie;
-  const csrfToken = sessionFromLogin.csrfToken;
-  const headers = buildHeaders(cookie, csrfToken);
-
   const endpoints = [
     { id: "health", method: "GET", path: "/api/health" },
     { id: "opsDashboard", method: "GET", path: "/api/ops/dashboard" },
@@ -258,7 +200,6 @@ async function main() {
       const url = `${baseUrl}${endpoint.path}`;
       const sample = await timedFetch(url, {
         method: endpoint.method,
-        headers,
       });
       samplesByEndpoint.get(endpoint.id).push(sample);
     }
@@ -303,7 +244,7 @@ async function main() {
 
   let remoteSaveResult = null;
   if (args.saveRemote) {
-    remoteSaveResult = await postBenchmarkSnapshot(baseUrl, snapshot, cookie, csrfToken);
+    remoteSaveResult = await postBenchmarkSnapshot(baseUrl, snapshot);
   }
 
   console.log(`[BENCHMARK] saved=${filePath}`);

@@ -4,7 +4,8 @@ const path = require('path');
 const crypto = require('crypto');
 const { chromium } = require('playwright');
 
-const BASE_URL = 'https://ekapv2.kik.gov.tr/sorgulamalar/kurul-kararlari';
+const LANDING_URL = 'https://ekapv2.kik.gov.tr/sorgulamalar';
+const KURUL_KARARLARI_URL = 'https://ekapv2.kik.gov.tr/sorgulamalar/kurul-kararlari';
 
 const DEFAULT_FROM = '2026/02/01';
 const DEFAULT_TO = '2026/02/15';
@@ -148,6 +149,7 @@ const isRetryableBrowserError = (error) => {
   if (message.includes('detail popup/page did not open after clicking detail icon')) return true;
   if (message.includes('visible selector bulunamadi')) return true;
   if (message.includes('download button element handle not available')) return true;
+  if (message.includes('detail icon index')) return true;
   if (/\b5\d{2}\b/.test(message)) return true;
   return false;
 };
@@ -350,7 +352,7 @@ const downloadViaKararPostback = async ({
     failOnStatusCode: false,
     headers: {
       Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-      Referer: BASE_URL,
+      Referer: KURUL_KARARLARI_URL,
     },
   });
 
@@ -669,30 +671,38 @@ const getVisibleDetailIconCount = async (page) =>
   }, SELECTORS.detailIcons);
 
 const clickVisibleDetailIconAt = async (page, index) => {
-  const clicked = await page.evaluate(
-    ({ selectors, targetIndex }) => {
-      const nodes = [];
-      const seen = new Set();
-      for (const selector of selectors) {
-        for (const el of Array.from(document.querySelectorAll(selector))) {
-          if (el && el.offsetParent !== null && !seen.has(el)) {
-            seen.add(el);
-            nodes.push(el);
+  const clickAttempt = async () =>
+    page.evaluate(
+      ({ selectors, targetIndex }) => {
+        const nodes = [];
+        const seen = new Set();
+        for (const selector of selectors) {
+          for (const el of Array.from(document.querySelectorAll(selector))) {
+            if (el && el.offsetParent !== null && !seen.has(el)) {
+              seen.add(el);
+              nodes.push(el);
+            }
           }
         }
-      }
-      if (targetIndex < 0 || targetIndex >= nodes.length) {
-        return false;
-      }
-      nodes[targetIndex].click();
-      return true;
-    },
-    {
-      selectors: SELECTORS.detailIcons,
-      targetIndex: index,
-    },
-  );
+        if (targetIndex < 0 || targetIndex >= nodes.length) {
+          return false;
+        }
+        nodes[targetIndex].click();
+        return true;
+      },
+      {
+        selectors: SELECTORS.detailIcons,
+        targetIndex: index,
+      },
+    );
 
+  let clicked = await clickAttempt();
+  if (clicked) {
+    return;
+  }
+
+  await waitForAnyGridSignal(page, 7000).catch(() => {});
+  clicked = await clickAttempt();
   if (!clicked) {
     throw new Error(`Detail icon index ${index} not found.`);
   }
@@ -1204,6 +1214,24 @@ const clickMahkemeKararlariTab = async (page) => {
   await sleep(500);
 };
 
+const openKurulKararlariSearchPage = async (page) => {
+  try {
+    await page.goto(LANDING_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    const card = page.locator('#kurul-kararlari').first();
+    await card.waitFor({ state: 'visible', timeout: 20000 });
+    await clickLocatorWithFallbacks(card);
+    await page.waitForURL(/\/sorgulamalar\/kurul-kararlari/i, { timeout: 30000 });
+    await sleep(500);
+    return;
+  } catch (error) {
+    console.warn(
+      `Kurul Kararlari landing navigation failed, fallback to direct route -> ${error?.message || String(error)}`,
+    );
+  }
+
+  await page.goto(KURUL_KARARLARI_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
+};
+
 const waitGridReady = async (page) => {
   await waitForAnyGridSignal(page, 20000);
 };
@@ -1487,6 +1515,7 @@ const processCurrentPageRows = async ({
               await page.keyboard.press('Escape').catch(() => {});
             }
             await closeExtraPages(context, page);
+            await waitGridReady(page).catch(() => {});
             throw error;
           }
         },
@@ -1607,7 +1636,7 @@ const setupSearchPage = async ({ context, cfg, fromDate, toDate, dateInputIndex,
       console.warn(`[RETRY] setup-search-page ${attempt}/${maxAttempts - 1} in ${delayMs}ms -> ${error.message}`);
     },
     task: async () => {
-      await page.goto(BASE_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
+      await openKurulKararlariSearchPage(page);
 
       if (cfg.useMahkemeTab) {
         await clickMahkemeKararlariTab(page);
@@ -2453,7 +2482,8 @@ async function runEkapDownloader(config) {
 
   const effectiveWorkerCount = allPages || startRow > 1 ? 1 : workerCount;
 
-  console.log(`Going to ${BASE_URL}`);
+  console.log(`Going to ${LANDING_URL}`);
+  console.log(`Kurul Kararlari route: ${KURUL_KARARLARI_URL}`);
   console.log(`Date range: ${fromDate} -> ${toDate}`);
   console.log(
     `Page range: ${allPages ? `${startPage} -> TUMU` : `${startPage} -> ${endPage}`} (startRow=${startRow})`,

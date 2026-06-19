@@ -22,7 +22,6 @@
       <div class="topbar__actions">
         <a href="/" class="btn btn--ghost btn--link">Proje Seçimi</a>
         <span class="btn btn--ghost btn--link is-active" aria-current="page">EKAP v3</span>
-        <button type="button" class="btn btn--ghost" data-auth-logout hidden>Çıkış</button>
         <button type="button" id="v3OpenDownloadsButton" class="btn btn--ghost">Klasörü Aç</button>
         <span id="v3Status" class="meta-pill" aria-live="polite" aria-atomic="true">Hazır</span>
       </div>
@@ -41,15 +40,6 @@
               <p class="ops-kpi-card__value">-</p>
               <p class="ops-kpi-card__hint">Veri bekleniyor</p>
             </article>
-          </div>
-          <div class="ops-alerts">
-            <div class="ops-alerts__head">
-              <h3>Aktif Alarmlar</h3>
-              <span id="v3OpsAlertsMeta" class="meta-pill">0 alarm</span>
-            </div>
-            <ul id="v3OpsAlertsList" class="ops-alert-list">
-              <li class="ops-alert-item ops-alert-item--ok">Aktif alarm yok.</li>
-            </ul>
           </div>
         </div>
       </section>
@@ -90,7 +80,7 @@
               </label>
 
               <label class="v3-field v3-field--check" for="allPages">
-                <input id="allPages" type="checkbox" />
+                <input id="allPages" type="checkbox" checked />
                 <span>Tüm sayfaları indir</span>
               </label>
 
@@ -100,11 +90,6 @@
                   <option value="headless">Gizli (headless)</option>
                   <option value="visible">Görünür</option>
                 </select>
-              </label>
-
-              <label class="v3-field">
-                <span>Worker Sayısı</span>
-                <input id="workerCount" type="number" min="1" max="8" step="1" value="1" />
               </label>
             </div>
 
@@ -116,7 +101,7 @@
         </div>
       </section>
 
-      <section class="panel panel--detail v3-panel">
+      <section class="panel panel--detail v3-panel v3-panel--live-log">
         <div class="panel__head">
           <h2>Canlı Log</h2>
           <div class="v3-head-actions">
@@ -273,8 +258,6 @@
         </div>
       </div>
     </div>
-
-    <script src="/auth.js" defer></script>
     <script src="/ekapv3.js" defer></script>
   </body>
 </html>

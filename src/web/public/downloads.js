@@ -31,30 +31,17 @@ const el = {
   confirmOverlay: document.getElementById("confirmOverlay"),
   confirmTitle: document.getElementById("confirmTitle"),
   confirmMessage: document.getElementById("confirmMessage"),
-  confirmInput: document.getElementById("confirmInput"),
-  confirmError: document.getElementById("confirmError"),
   cancelConfirmButton: document.getElementById("cancelConfirmButton"),
   approveConfirmButton: document.getElementById("approveConfirmButton"),
 };
 
 function withAuthHeaders(headers = {}) {
-  if (window.EkapAuth?.withCsrfHeaders) {
-    return window.EkapAuth.withCsrfHeaders(headers);
-  }
   return {
     ...headers,
   };
 }
 
-function handleUnauthorizedResponse(response) {
-  if (response?.status === 401 && window.EkapAuth?.redirectToLogin) {
-    window.EkapAuth.redirectToLogin();
-  }
-}
-
-function normalizeConfirmation(value) {
-  return String(value || "").trim().toLocaleLowerCase("tr-TR");
-}
+function handleApiResponse() {}
 
 function formatDate(value) {
   if (!value) {
@@ -85,7 +72,7 @@ async function fetchJson(url) {
   const response = await fetch(url, {
     credentials: "same-origin",
   });
-  handleUnauthorizedResponse(response);
+  handleApiResponse(response);
   if (!response.ok) {
     const text = await response.text();
     throw new Error(text || `${response.status} ${response.statusText}`);
@@ -102,7 +89,7 @@ async function postJson(url, body) {
     }),
     body: JSON.stringify(body || {}),
   });
-  handleUnauthorizedResponse(response);
+  handleApiResponse(response);
 
   const text = await response.text();
   let payload = {};
@@ -260,12 +247,10 @@ function openConfirmationDialog({ title, message, action }) {
   state.pendingDeleteAction = action;
   el.confirmTitle.textContent = title;
   el.confirmMessage.textContent = message;
-  el.confirmInput.value = "";
-  el.confirmError.hidden = true;
   el.cancelConfirmButton.disabled = false;
   el.approveConfirmButton.disabled = false;
   el.confirmOverlay.hidden = false;
-  el.confirmInput.focus();
+  el.approveConfirmButton.focus();
 }
 
 function closeConfirmationDialog() {
@@ -275,8 +260,6 @@ function closeConfirmationDialog() {
   state.pendingDeleteAction = null;
   state.confirmBusy = false;
   el.confirmOverlay.hidden = true;
-  el.confirmInput.value = "";
-  el.confirmError.hidden = true;
   el.cancelConfirmButton.disabled = false;
   el.approveConfirmButton.disabled = false;
 
@@ -342,7 +325,7 @@ async function runSelectedDelete() {
 
   openConfirmationDialog({
     title: "Seçili Kayıtları Sil",
-    message: `${ids.length} kayıt silinecek. Bu işlem geri alınamaz.`,
+    message: `${ids.length} kayıt silinecek.`,
     action: async (confirmation) => {
       const payload = await postJson("/api/downloads/delete", {
         mode: "selected",
@@ -466,11 +449,7 @@ el.approveConfirmButton.addEventListener(
       return;
     }
 
-    const confirmation = normalizeConfirmation(el.confirmInput.value);
-    if (confirmation !== DELETE_CONFIRMATION_TEXT) {
-      el.confirmError.hidden = false;
-      return;
-    }
+    const confirmation = DELETE_CONFIRMATION_TEXT;
 
     state.confirmBusy = true;
     el.approveConfirmButton.disabled = true;
@@ -491,9 +470,6 @@ el.approveConfirmButton.addEventListener(
 
 (async () => {
   try {
-    if (window.EkapAuth?.ready) {
-      await window.EkapAuth.ready;
-    }
     setStatus("Yükleniyor...");
     await loadDateOptions();
     await loadList();

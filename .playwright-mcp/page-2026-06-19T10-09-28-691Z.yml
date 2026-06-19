@@ -1,0 +1,179 @@
+- generic [active] [ref=e1]:
+  - banner [ref=e2]:
+    - generic [ref=e3]:
+      - paragraph [ref=e4]: EKAP DATA HUB
+      - heading "EKAP v3 Başlat/Durdur Yönetimi" [level=1] [ref=e5]
+    - generic [ref=e6]:
+      - link "Proje Seçimi" [ref=e7] [cursor=pointer]:
+        - /url: /
+      - generic [ref=e8] [cursor=pointer]: EKAP v3
+      - button "Klasörü Aç" [ref=e9] [cursor=pointer]
+      - generic [ref=e10]: Hazır
+  - main [ref=e11]:
+    - generic [ref=e12]:
+      - generic [ref=e13]:
+        - heading "Operasyon Dashboard" [level=2] [ref=e14]
+        - generic [ref=e15]: Yükleniyor
+      - generic [ref=e16]:
+        - article [ref=e18]:
+          - paragraph [ref=e19]: KPI
+          - paragraph [ref=e20]: "-"
+          - paragraph [ref=e21]: Veri bekleniyor
+        - generic [ref=e22]:
+          - generic [ref=e23]:
+            - heading "Aktif Alarmlar" [level=3] [ref=e24]
+            - generic [ref=e25]: 0 alarm
+          - list [ref=e26]:
+            - listitem [ref=e27]: Aktif alarm yok.
+    - generic [ref=e28]:
+      - heading "İndirme Parametreleri" [level=2] [ref=e30]
+      - generic [ref=e32]:
+        - generic [ref=e33]:
+          - generic [ref=e34]:
+            - generic [ref=e35]: Tür
+            - combobox "Tür" [ref=e36]:
+              - option "Mahkeme" [selected]
+              - option "Uyuşmazlık"
+          - generic [ref=e37]:
+            - generic [ref=e38]: Başlangıç Tarihi
+            - textbox "Başlangıç Tarihi" [ref=e39]: 2026-06-01
+          - generic [ref=e40]:
+            - generic [ref=e41]: Bitiş Tarihi
+            - textbox "Bitiş Tarihi" [ref=e42]: 2026-06-19
+          - generic [ref=e43]:
+            - generic [ref=e44]: Başlangıç Sayfası
+            - spinbutton "Başlangıç Sayfası" [ref=e45]: "1"
+          - generic [ref=e46]:
+            - generic [ref=e47]: Bitiş Sayfası
+            - spinbutton "Bitiş Sayfası" [ref=e48]: "1"
+          - generic [ref=e49]:
+            - checkbox "Tüm sayfaları indir" [ref=e50]
+            - generic [ref=e51]: Tüm sayfaları indir
+          - generic [ref=e52]:
+            - generic [ref=e53]: Tarayıcı Modu
+            - combobox "Tarayıcı Modu" [ref=e54]:
+              - option "Gizli (headless)" [selected]
+              - option "Görünür"
+          - generic [ref=e55]:
+            - generic [ref=e56]: Worker Sayısı
+            - spinbutton "Worker Sayısı" [ref=e57]: "1"
+        - generic [ref=e58]:
+          - button "Başlat" [ref=e59] [cursor=pointer]
+          - button "Durdur" [disabled] [ref=e60]
+    - generic [ref=e61]:
+      - generic [ref=e62]:
+        - heading "Canlı Log" [level=2] [ref=e63]
+        - generic [ref=e64]:
+          - generic [ref=e65]: 0 PDF
+          - button "Temizle" [disabled] [ref=e66]
+      - generic [ref=e67]:
+        - generic [ref=e68]: Henüz indirilen PDF yok.
+        - generic "Canlı log sayfalama" [ref=e69]:
+          - button "İlk" [disabled] [ref=e70]
+          - button "Önceki" [disabled] [ref=e71]
+          - generic [ref=e72]: Sayfa 1 / 1
+          - button "Sonraki" [disabled] [ref=e73]
+          - button "Son" [disabled] [ref=e74]
+          - spinbutton "Canlı log sayfasına git" [ref=e75]: "1"
+          - button "Git" [ref=e76] [cursor=pointer]
+    - generic [ref=e77]:
+      - generic [ref=e78]:
+        - heading "İndirme Geçmişi" [level=2] [ref=e79]
+        - generic [ref=e80]:
+          - generic [ref=e81]: 5 kayıt
+          - button "Temizle" [ref=e82] [cursor=pointer]
+      - table [ref=e84]:
+        - rowgroup [ref=e85]:
+          - row "Başlangıç Tür Tarih Aralığı Seçilen Sayfalar İşlenen Sayfalar Durum Sonuç" [ref=e86]:
+            - columnheader "Başlangıç" [ref=e87]
+            - columnheader "Tür" [ref=e88]
+            - columnheader "Tarih Aralığı" [ref=e89]
+            - columnheader "Seçilen Sayfalar" [ref=e90]
+            - columnheader "İşlenen Sayfalar" [ref=e91]
+            - columnheader "Durum" [ref=e92]
+            - columnheader "Sonuç" [ref=e93]
+        - rowgroup [ref=e94]:
+          - row "19 Haz 2026 12:58 uyusmazlik 2026-06-01 -> 2026-06-19 1 -> 1 1 completed ok:5 / fail:0 / hedef:- / worker:1 / dup:0" [ref=e95]:
+            - cell "19 Haz 2026 12:58" [ref=e96]
+            - cell "uyusmazlik" [ref=e97]
+            - cell "2026-06-01 -> 2026-06-19" [ref=e98]
+            - cell "1 -> 1" [ref=e99]
+            - cell "1" [ref=e100]
+            - cell "completed" [ref=e101]
+            - cell "ok:5 / fail:0 / hedef:- / worker:1 / dup:0" [ref=e102]
+          - row "19 Haz 2026 12:57 mahkeme 2026-06-01 -> 2026-06-19 1 -> 1 1 completed ok:5 / fail:0 / hedef:- / worker:1 / dup:0" [ref=e103]:
+            - cell "19 Haz 2026 12:57" [ref=e104]
+            - cell "mahkeme" [ref=e105]
+            - cell "2026-06-01 -> 2026-06-19" [ref=e106]
+            - cell "1 -> 1" [ref=e107]
+            - cell "1" [ref=e108]
+            - cell "completed" [ref=e109]
+            - cell "ok:5 / fail:0 / hedef:- / worker:1 / dup:0" [ref=e110]
+          - row "19 Haz 2026 11:55 mahkeme 2026-06-01 -> 2026-07-31 Tümü - stopped ok:0 / fail:0 / hedef:- / worker:1 / dup:0" [ref=e111]:
+            - cell "19 Haz 2026 11:55" [ref=e112]
+            - cell "mahkeme" [ref=e113]
+            - cell "2026-06-01 -> 2026-07-31" [ref=e114]
+            - cell "Tümü" [ref=e115]
+            - cell "-" [ref=e116]
+            - cell "stopped" [ref=e117]
+            - cell "ok:0 / fail:0 / hedef:- / worker:1 / dup:0" [ref=e118]
+          - row "18 Mar 2026 12:05 mahkeme 2026-03-01 -> 2026-03-10 Tümü 1 completed ok:10 / fail:0 / hedef:10 / worker:3 / dup:0" [ref=e119]:
+            - cell "18 Mar 2026 12:05" [ref=e120]
+            - cell "mahkeme" [ref=e121]
+            - cell "2026-03-01 -> 2026-03-10" [ref=e122]
+            - cell "Tümü" [ref=e123]
+            - cell "1" [ref=e124]
+            - cell "completed" [ref=e125]
+            - cell "ok:10 / fail:0 / hedef:10 / worker:3 / dup:0" [ref=e126]
+          - row "18 Mar 2026 11:49 mahkeme 2026-03-01 -> 2026-03-10 1 -> 1 - running ok:0 / fail:0 / hedef:10 / worker:3 / dup:0" [ref=e127]:
+            - cell "18 Mar 2026 11:49" [ref=e128]
+            - cell "mahkeme" [ref=e129]
+            - cell "2026-03-01 -> 2026-03-10" [ref=e130]
+            - cell "1 -> 1" [ref=e131]
+            - cell "-" [ref=e132]
+            - cell "running" [ref=e133]
+            - cell "ok:0 / fail:0 / hedef:10 / worker:3 / dup:0" [ref=e134]
+      - generic "İndirme geçmişi sayfalama" [ref=e135]:
+        - button "İlk" [disabled] [ref=e136]
+        - button "Önceki" [disabled] [ref=e137]
+        - generic [ref=e138]: Sayfa 1 / 1
+        - button "Sonraki" [disabled] [ref=e139]
+        - button "Son" [disabled] [ref=e140]
+        - spinbutton "İndirme geçmişi sayfasına git" [ref=e141]: "1"
+        - button "Git" [ref=e142] [cursor=pointer]
+    - generic [ref=e143]:
+      - generic [ref=e144]:
+        - heading "İndirilen Dosyalar" [level=2] [ref=e145]
+        - generic [ref=e146]: 0 dosya
+      - generic [ref=e148]:
+        - generic [ref=e149]:
+          - generic [ref=e150]: Tür
+          - combobox "Tür" [ref=e151]:
+            - option "Tümü" [selected]
+            - option "Mahkeme"
+            - option "Uyuşmazlık"
+        - button "Listeyi Yenile" [ref=e152] [cursor=pointer]
+        - button "Seçilenleri Sil" [disabled] [ref=e153]
+        - button "Türü Toplu Sil" [disabled] [ref=e154]
+        - button "Tümünü Sil" [ref=e155] [cursor=pointer]
+      - table [ref=e157]:
+        - rowgroup [ref=e158]:
+          - row "Bu sayfadakileri seç Bu sayfa Tarih Tür Dosya Boyut İşlem" [ref=e159]:
+            - columnheader "Bu sayfadakileri seç Bu sayfa" [ref=e160]:
+              - generic [ref=e161]:
+                - checkbox "Bu sayfadakileri seç" [ref=e162]
+                - generic [ref=e163]: Bu sayfa
+            - columnheader "Tarih" [ref=e164]
+            - columnheader "Tür" [ref=e165]
+            - columnheader "Dosya" [ref=e166]
+            - columnheader "Boyut" [ref=e167]
+            - columnheader "İşlem" [ref=e168]
+        - rowgroup
+      - generic "İndirilen dosyalar sayfalama" [ref=e169]:
+        - button "İlk" [ref=e170] [cursor=pointer]
+        - button "Önceki" [ref=e171] [cursor=pointer]
+        - generic [ref=e172]: Sayfa 1 / 1
+        - button "Sonraki" [ref=e173] [cursor=pointer]
+        - button "Son" [ref=e174] [cursor=pointer]
+        - spinbutton "İndirilen dosyalar sayfasına git" [ref=e175]: "1"
+        - button "Git" [ref=e176] [cursor=pointer]

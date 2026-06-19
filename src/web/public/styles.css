@@ -211,69 +211,6 @@ body {
   height: calc(100dvh - 198px);
 }
 
-.login-page {
-  display: grid;
-  place-items: center;
-  padding: 24px;
-}
-
-.login-shell {
-  position: relative;
-  z-index: 1;
-  width: min(460px, 100%);
-}
-
-.login-card {
-  border-radius: 20px;
-  border: 1px solid rgba(15, 23, 36, 0.14);
-  box-shadow: var(--shadow);
-  background: var(--card);
-  padding: 24px;
-}
-
-.login-card h1 {
-  margin: 0 0 8px;
-  font-family: "Space Grotesk", sans-serif;
-  font-size: 1.6rem;
-}
-
-.login-copy {
-  margin: 0 0 16px;
-  color: var(--text-soft);
-}
-
-.login-form {
-  display: grid;
-  gap: 12px;
-}
-
-.login-field {
-  display: grid;
-  gap: 6px;
-}
-
-.login-field span {
-  font-size: 0.82rem;
-  font-weight: 700;
-  color: #354a64;
-}
-
-.login-field input {
-  width: 100%;
-  border: 1px solid #c5d0de;
-  border-radius: 10px;
-  background: #fff;
-  color: #172233;
-  padding: 10px 12px;
-}
-
-.login-status {
-  justify-self: start;
-  margin: 0;
-  font-size: 0.82rem;
-  font-weight: 700;
-}
-
 .layout--single {
   grid-template-columns: 1fr;
   height: auto;
@@ -742,10 +679,32 @@ body {
   grid-template-rows: auto auto minmax(0, 1fr);
 }
 
+.panel--detail.v3-panel--live-log {
+  grid-template-rows: auto auto;
+  min-height: 0;
+  height: auto;
+}
+
 .v3-body {
   padding: 14px 16px 16px;
   display: grid;
   gap: 12px;
+}
+
+.v3-panel--live-log .v3-body {
+  gap: 10px;
+  padding-bottom: 14px;
+}
+
+.v3-panel--live-log .text-block {
+  flex: none;
+  height: 176px;
+  min-height: 144px;
+  max-height: 220px;
+}
+
+.v3-panel--live-log .v3-pagination {
+  align-self: start;
 }
 
 .v3-form {
@@ -1222,4 +1181,50 @@ body {
   .text-block {
     min-height: 0;
   }
+}
+
+/* Toast bildirimleri (sağ üst) */
+.toast-container {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 360px;
+  pointer-events: none;
+}
+
+.toast {
+  pointer-events: auto;
+  cursor: pointer;
+  padding: 12px 16px;
+  border-radius: 10px;
+  color: #fff;
+  font-size: 14px;
+  line-height: 1.35;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  background: rgba(30, 41, 59, 0.96);
+  border-left: 4px solid var(--accent);
+  opacity: 0;
+  transform: translateX(16px);
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+
+.toast--visible {
+  opacity: 1;
+  transform: translateX(0);
+}
+
+.toast--success {
+  border-left-color: #47d3be;
+}
+
+.toast--error {
+  border-left-color: #ff6b6b;
+}
+
+.toast--info {
+  border-left-color: #ffd60a;
 }

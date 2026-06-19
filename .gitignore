@@ -4,6 +4,8 @@ reports/
 .DS_Store
 *.log
 .env
+.env.*
+!.env.example
 .venv/
 
 # EKAP v3 runtime artifacts (local only)

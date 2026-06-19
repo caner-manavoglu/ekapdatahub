@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "runMeta": {
+    "type": "uyusmazlik",
+    "fromDate": "2026/06/01",
+    "toDate": "2026/06/19"
+  },
+  "updatedAt": "2026-06-19T10:53:15.085Z",
+  "lastProcessed": {
+    "page": 1,
+    "row": 4,
+    "at": "2026-06-19T10:53:14.632Z"
+  },
+  "lastSuccess": {
+    "page": 1,
+    "row": 3,
+    "at": "2026-06-19T10:53:11.804Z"
+  },
+  "totals": {
+    "downloaded": 3,
+    "failed": 1,
+    "retries": 0,
+    "duplicates": 0
+  },
+  "finishedAt": "2026-06-19T10:53:15.085Z",
+  "summary": {
+    "status": "failed",
+    "error": "page.evaluate: Target page, context or browser has been closed"
+  }
+}

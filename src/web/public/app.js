@@ -114,19 +114,12 @@ function parseDownloadFileName(contentDisposition) {
 }
 
 function withAuthHeaders(headers = {}) {
-  if (window.EkapAuth?.withCsrfHeaders) {
-    return window.EkapAuth.withCsrfHeaders(headers);
-  }
   return {
     ...headers,
   };
 }
 
-function handleUnauthorizedResponse(response) {
-  if (response?.status === 401 && window.EkapAuth?.redirectToLogin) {
-    window.EkapAuth.redirectToLogin();
-  }
-}
+function handleApiResponse() {}
 
 function updatePdfButtonsState() {
   const ilanList = Array.isArray(state.selectedDetail?.ilanList) ? state.selectedDetail.ilanList : [];
@@ -169,7 +162,7 @@ async function downloadCurrentIlanPdf(kind) {
     const response = await fetch(url, {
       credentials: "same-origin",
     });
-    handleUnauthorizedResponse(response);
+    handleApiResponse(response);
     if (!response.ok) {
       let errorMessage = `${response.status} ${response.statusText}`;
       try {
@@ -213,7 +206,7 @@ async function fetchJson(url) {
   const response = await fetch(url, {
     credentials: "same-origin",
   });
-  handleUnauthorizedResponse(response);
+  handleApiResponse(response);
   if (!response.ok) {
     const text = await response.text();
     throw new Error(`${response.status} ${response.statusText} - ${text}`);
@@ -230,7 +223,7 @@ async function postJson(url, body) {
     }),
     body: JSON.stringify(body || {}),
   });
-  handleUnauthorizedResponse(response);
+  handleApiResponse(response);
 
   const text = await response.text();
   let payload = {};
@@ -791,9 +784,6 @@ for (const tabButton of el.tabs) {
 
 (async () => {
   try {
-    if (window.EkapAuth?.ready) {
-      await window.EkapAuth.ready;
-    }
     const data = await syncScrapeStatus();
     if (data?.running) {
       startScrapePolling();

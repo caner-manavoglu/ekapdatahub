@@ -1,0 +1,131 @@
+- generic [active] [ref=e1]:
+  - banner [ref=e2]:
+    - generic [ref=e3]:
+      - paragraph [ref=e4]: EKAP DATA HUB
+      - heading "EKAP v3 Başlat/Durdur Yönetimi" [level=1] [ref=e5]
+    - generic [ref=e6]:
+      - link "Proje Seçimi" [ref=e7] [cursor=pointer]:
+        - /url: /
+      - generic [ref=e8] [cursor=pointer]: EKAP v3
+      - button "Klasörü Aç" [ref=e9] [cursor=pointer]
+      - generic [ref=e10]: Durduruldu
+  - main [ref=e11]:
+    - generic [ref=e12]:
+      - generic [ref=e13]:
+        - heading "Operasyon Dashboard" [level=2] [ref=e14]
+        - generic [ref=e15]: Yükleniyor
+      - article [ref=e18]:
+        - paragraph [ref=e19]: KPI
+        - paragraph [ref=e20]: "-"
+        - paragraph [ref=e21]: Veri bekleniyor
+    - generic [ref=e22]:
+      - heading "İndirme Parametreleri" [level=2] [ref=e24]
+      - generic [ref=e26]:
+        - generic [ref=e27]:
+          - generic [ref=e28]:
+            - generic [ref=e29]: Tür
+            - combobox "Tür" [ref=e30]:
+              - option "Mahkeme" [selected]
+              - option "Uyuşmazlık"
+          - generic [ref=e31]:
+            - generic [ref=e32]: Başlangıç Tarihi
+            - textbox "Başlangıç Tarihi" [ref=e33]: 2026-06-01
+          - generic [ref=e34]:
+            - generic [ref=e35]: Bitiş Tarihi
+            - textbox "Bitiş Tarihi" [ref=e36]: 2026-06-19
+          - generic [ref=e37]:
+            - generic [ref=e38]: Başlangıç Sayfası
+            - spinbutton "Başlangıç Sayfası" [disabled] [ref=e39]: "1"
+          - generic [ref=e40]:
+            - generic [ref=e41]: Bitiş Sayfası
+            - spinbutton "Bitiş Sayfası" [disabled] [ref=e42]: "1"
+          - generic [ref=e43]:
+            - checkbox "Tüm sayfaları indir" [checked] [ref=e44]
+            - generic [ref=e45]: Tüm sayfaları indir
+          - generic [ref=e46]:
+            - generic [ref=e47]: Tarayıcı Modu
+            - combobox "Tarayıcı Modu" [ref=e48]:
+              - option "Gizli (headless)" [selected]
+              - option "Görünür"
+        - generic [ref=e49]:
+          - button "Başlat" [ref=e50] [cursor=pointer]
+          - button "Durdur" [disabled] [ref=e51]
+    - generic [ref=e52]:
+      - generic [ref=e53]:
+        - heading "Canlı Log" [level=2] [ref=e54]
+        - generic [ref=e55]:
+          - generic [ref=e56]: 1 PDF
+          - button "Temizle" [ref=e57] [cursor=pointer]
+      - generic [ref=e58]:
+        - generic [ref=e59]: 204-Gülhane
+        - generic "Canlı log sayfalama" [ref=e60]:
+          - button "İlk" [disabled] [ref=e61]
+          - button "Önceki" [disabled] [ref=e62]
+          - generic [ref=e63]: Sayfa 1 / 1
+          - button "Sonraki" [disabled] [ref=e64]
+          - button "Son" [disabled] [ref=e65]
+          - spinbutton "Canlı log sayfasına git" [ref=e66]: "1"
+          - button "Git" [ref=e67] [cursor=pointer]
+    - generic [ref=e68]:
+      - generic [ref=e69]:
+        - heading "İndirme Geçmişi" [level=2] [ref=e70]
+        - generic [ref=e71]:
+          - generic [ref=e72]: 0 kayıt
+          - button "Temizle" [disabled] [ref=e73]
+      - table [ref=e75]:
+        - rowgroup [ref=e76]:
+          - row "Başlangıç Tür Tarih Aralığı Seçilen Sayfalar İşlenen Sayfalar Durum Sonuç" [ref=e77]:
+            - columnheader "Başlangıç" [ref=e78]
+            - columnheader "Tür" [ref=e79]
+            - columnheader "Tarih Aralığı" [ref=e80]
+            - columnheader "Seçilen Sayfalar" [ref=e81]
+            - columnheader "İşlenen Sayfalar" [ref=e82]
+            - columnheader "Durum" [ref=e83]
+            - columnheader "Sonuç" [ref=e84]
+        - rowgroup [ref=e85]:
+          - row "Kayıt bulunamadı." [ref=e86]:
+            - cell "Kayıt bulunamadı." [ref=e87]
+      - generic "İndirme geçmişi sayfalama" [ref=e88]:
+        - button "İlk" [disabled] [ref=e89]
+        - button "Önceki" [disabled] [ref=e90]
+        - generic [ref=e91]: Sayfa 1 / 1
+        - button "Sonraki" [disabled] [ref=e92]
+        - button "Son" [disabled] [ref=e93]
+        - spinbutton "İndirme geçmişi sayfasına git" [ref=e94]: "1"
+        - button "Git" [ref=e95] [cursor=pointer]
+    - generic [ref=e96]:
+      - generic [ref=e97]:
+        - heading "İndirilen Dosyalar" [level=2] [ref=e98]
+        - generic [ref=e99]: 0 dosya
+      - generic [ref=e101]:
+        - generic [ref=e102]:
+          - generic [ref=e103]: Tür
+          - combobox "Tür" [ref=e104]:
+            - option "Tümü" [selected]
+            - option "Mahkeme"
+            - option "Uyuşmazlık"
+        - button "Listeyi Yenile" [ref=e105] [cursor=pointer]
+        - button "Seçilenleri Sil" [disabled] [ref=e106]
+        - button "Türü Toplu Sil" [disabled] [ref=e107]
+        - button "Tümünü Sil" [ref=e108] [cursor=pointer]
+      - table [ref=e110]:
+        - rowgroup [ref=e111]:
+          - row "Bu sayfadakileri seç Bu sayfa Tarih Tür Dosya Boyut İşlem" [ref=e112]:
+            - columnheader "Bu sayfadakileri seç Bu sayfa" [ref=e113]:
+              - generic [ref=e114]:
+                - checkbox "Bu sayfadakileri seç" [ref=e115]
+                - generic [ref=e116]: Bu sayfa
+            - columnheader "Tarih" [ref=e117]
+            - columnheader "Tür" [ref=e118]
+            - columnheader "Dosya" [ref=e119]
+            - columnheader "Boyut" [ref=e120]
+            - columnheader "İşlem" [ref=e121]
+        - rowgroup
+      - generic "İndirilen dosyalar sayfalama" [ref=e122]:
+        - button "İlk" [ref=e123] [cursor=pointer]
+        - button "Önceki" [ref=e124] [cursor=pointer]
+        - generic [ref=e125]: Sayfa 1 / 1
+        - button "Sonraki" [ref=e126] [cursor=pointer]
+        - button "Son" [ref=e127] [cursor=pointer]
+        - spinbutton "İndirilen dosyalar sayfasına git" [ref=e128]: "1"
+        - button "Git" [ref=e129] [cursor=pointer]

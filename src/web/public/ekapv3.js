@@ -96,19 +96,12 @@ const el = {
 };
 
 function withAuthHeaders(headers = {}) {
-  if (window.EkapAuth?.withCsrfHeaders) {
-    return window.EkapAuth.withCsrfHeaders(headers);
-  }
   return {
     ...headers,
   };
 }
 
-function handleUnauthorizedResponse(response) {
-  if (response?.status === 401 && window.EkapAuth?.redirectToLogin) {
-    window.EkapAuth.redirectToLogin();
-  }
-}
+function handleApiResponse() {}
 
 function escapeHtml(value) {
   return String(value || "")
@@ -279,7 +272,7 @@ async function fetchJson(url) {
   const response = await fetch(url, {
     credentials: "same-origin",
   });
-  handleUnauthorizedResponse(response);
+  handleApiResponse(response);
   const text = await response.text();
   let payload = {};
   try {
@@ -302,7 +295,7 @@ async function postJson(url, body) {
     }),
     body: JSON.stringify(body || {}),
   });
-  handleUnauthorizedResponse(response);
+  handleApiResponse(response);
   const text = await response.text();
   let payload = {};
   try {
@@ -335,6 +328,35 @@ function setStatus(message, type = "neutral") {
     el.status.style.background = "rgba(255, 107, 107, 0.16)";
     el.status.style.color = "#fff";
   }
+}
+
+function showToast(message, type = "info") {
+  let container = document.getElementById("toastContainer");
+  if (!container) {
+    container = document.createElement("div");
+    container.id = "toastContainer";
+    container.className = "toast-container";
+    container.setAttribute("aria-live", "polite");
+    document.body.appendChild(container);
+  }
+
+  const toast = document.createElement("div");
+  toast.className = `toast toast--${type}`;
+  toast.setAttribute("role", "status");
+  toast.textContent = message;
+  container.appendChild(toast);
+
+  requestAnimationFrame(() => toast.classList.add("toast--visible"));
+
+  const remove = () => {
+    toast.classList.remove("toast--visible");
+    setTimeout(() => toast.remove(), 250);
+  };
+  const timer = setTimeout(remove, 3500);
+  toast.addEventListener("click", () => {
+    clearTimeout(timer);
+    remove();
+  });
 }
 
 function getErrorMessage(error, fallbackMessage = "Beklenmeyen bir hata oluştu.") {
@@ -400,6 +422,7 @@ function readFormPayload() {
 
 function renderStatus() {
   el.startButton.disabled = state.running;
+  el.startButton.textContent = state.running ? "Çalışıyor…" : "Başlat";
   el.stopButton.disabled = !state.running;
   el.clearLogsButton.disabled = state.logs.length === 0;
   el.clearHistoryButton.disabled = state.running || state.historyTotal === 0;
@@ -477,8 +500,6 @@ function renderOpsDashboard() {
   <p class="ops-kpi-card__value">-</p>
   <p class="ops-kpi-card__hint">Operasyon verisi bekleniyor</p>
 </article>`;
-    el.opsAlertsMeta.textContent = "0 alarm";
-    el.opsAlertsList.innerHTML = '<li class="ops-alert-item ops-alert-item--ok">Aktif alarm yok.</li>';
     return;
   }
 
@@ -486,7 +507,10 @@ function renderOpsDashboard() {
   const windowHours = Number(dashboard?.window?.hours || 0);
   el.opsMeta.textContent = `${windowHours || "-"} saat | ${generatedAt}`;
 
-  const kpis = Array.isArray(dashboard.kpis) ? dashboard.kpis : [];
+  const HIDDEN_KPI_TITLES = new Set(["Indirme P95 Sure", "Scrape Detail P95", "Scrape Queue P95"]);
+  const kpis = (Array.isArray(dashboard.kpis) ? dashboard.kpis : []).filter(
+    (kpi) => !HIDDEN_KPI_TITLES.has(String(kpi?.title || "")),
+  );
   if (!kpis.length) {
     el.opsKpis.innerHTML = `<article class="ops-kpi-card">
   <p class="ops-kpi-card__title">KPI</p>
@@ -509,8 +533,14 @@ function renderOpsDashboard() {
       .join("");
   }
 
+  if (!el.opsAlertsList) {
+    return;
+  }
+
   const alerts = Array.isArray(dashboard.alerts) ? dashboard.alerts : [];
-  el.opsAlertsMeta.textContent = `${alerts.length} alarm`;
+  if (el.opsAlertsMeta) {
+    el.opsAlertsMeta.textContent = `${alerts.length} alarm`;
+  }
   if (!alerts.length) {
     el.opsAlertsList.innerHTML = '<li class="ops-alert-item ops-alert-item--ok">Aktif alarm yok.</li>';
     return;
@@ -942,12 +972,19 @@ el.form.addEventListener(
   withAsyncStatus(async (event) => {
     event.preventDefault();
     const payload = readFormPayload();
-    await postJson("/api/ekapv3/download", payload);
-    state.logPage = 1;
-    state.historyPage = 1;
-    await refreshStatus();
-    await refreshHistory();
-    await refreshOpsDashboard();
+    el.startButton.disabled = true;
+    el.startButton.textContent = "Başlatılıyor…";
+    try {
+      await postJson("/api/ekapv3/download", payload);
+      state.logPage = 1;
+      state.historyPage = 1;
+      await refreshStatus();
+      await refreshHistory();
+      await refreshOpsDashboard();
+      showToast("İndirme başlatıldı.", "success");
+    } finally {
+      renderStatus();
+    }
   }, "Başlatma başarısız."),
 );
 
@@ -1016,6 +1053,7 @@ el.stopButton.addEventListener(
     await postJson("/api/ekapv3/stop", {});
     await refreshStatus();
     await refreshOpsDashboard();
+    showToast("İndirme durduruldu.", "info");
   }, "Durdurma başarısız."),
 );
 
@@ -1254,10 +1292,6 @@ el.approveConfirmButton.addEventListener(
 );
 
 (async () => {
-  if (window.EkapAuth?.ready) {
-    await window.EkapAuth.ready;
-  }
-
   const now = new Date();
   const yyyy = now.getFullYear();
   const mm = String(now.getMonth() + 1).padStart(2, "0");

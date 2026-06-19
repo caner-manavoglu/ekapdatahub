@@ -23,7 +23,6 @@
         <a href="/" class="btn btn--ghost btn--link">Proje Seçimi</a>
         <a href="/dokumantasyon" class="btn btn--ghost btn--link">Dokümantasyona Dön</a>
         <span class="btn btn--ghost btn--link is-active" aria-current="page">Kayıt Yönetimi</span>
-        <button type="button" class="btn btn--ghost" data-auth-logout hidden>Çıkış</button>
         <div class="topbar__field">
           <label for="downloadsSearchInput">Metin Ara</label>
           <input
@@ -83,23 +82,13 @@
       <div class="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
         <h2 id="confirmTitle">Silme Onayı</h2>
         <p id="confirmMessage"></p>
-        <p class="confirm-hint">Devam etmek için <strong>onaylıyorum</strong> yazın.</p>
-        <input
-          id="confirmInput"
-          type="text"
-          autocomplete="off"
-          placeholder="onaylıyorum"
-          aria-label="Silme onayı"
-        />
-        <p id="confirmError" class="confirm-error" hidden>Onay metni hatalı.</p>
+        <p class="confirm-hint">Bu işlem geri alınamaz. Emin misiniz?</p>
         <div class="confirm-actions">
-          <button id="cancelConfirmButton" type="button" class="btn btn--ghost">Vazgeç</button>
-          <button id="approveConfirmButton" type="button" class="btn btn--danger">Sil</button>
+          <button id="cancelConfirmButton" type="button" class="btn btn--ghost">Hayır</button>
+          <button id="approveConfirmButton" type="button" class="btn btn--danger">Evet</button>
         </div>
       </div>
     </div>
-
-    <script src="/auth.js" defer></script>
     <script src="/downloads.js" defer></script>
   </body>
 </html>

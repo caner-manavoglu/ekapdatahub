@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "runMeta": {
+    "type": "mahkeme",
+    "fromDate": "2026/05/01",
+    "toDate": "2026/05/15"
+  },
+  "updatedAt": "2026-06-19T10:49:36.266Z",
+  "lastProcessed": {
+    "page": 4,
+    "row": 3,
+    "at": "2026-06-19T10:49:35.821Z"
+  },
+  "lastSuccess": {
+    "page": 4,
+    "row": 2,
+    "at": "2026-06-19T10:49:34.217Z"
+  },
+  "totals": {
+    "downloaded": 17,
+    "failed": 1,
+    "retries": 0,
+    "duplicates": 0
+  },
+  "finishedAt": "2026-06-19T10:49:36.266Z",
+  "summary": {
+    "status": "failed",
+    "error": "page.evaluate: Target page, context or browser has been closed"
+  }
+}

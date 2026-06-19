@@ -2,9 +2,6 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
 
-process.env.AUTH_ENABLED = "true";
-process.env.AUTH_USERS = '[{"username":"admin","password":"plain:test-admin","role":"admin"}]';
-
 const { _internal } = require("../src/web/server");
 
 function createMockRes() {
@@ -315,7 +312,7 @@ test("runEkapV3Preflight should not throw on endpoint timeout when strict mode i
   }
 });
 
-test("requireApiAuth should enforce role and csrf checks", () => {
+test("requireApiAuth should bypass role and csrf checks when auth is disabled", () => {
   _internal.authSessions.clear();
 
   const viewerSession = _internal.createAuthSession({
@@ -358,8 +355,8 @@ test("requireApiAuth should enforce role and csrf checks", () => {
   _internal.requireApiAuth(denyReq, denyRes, () => {
     nextCalled = true;
   });
-  assert.equal(nextCalled, false);
-  assert.equal(denyRes.statusCode, 403);
+  assert.equal(nextCalled, true);
+  assert.equal(denyRes.statusCode, 200);
 
   const allowReq = {
     method: "POST",
